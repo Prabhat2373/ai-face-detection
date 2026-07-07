@@ -1,0 +1,487 @@
+import { mkdir } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { env, type AppEnv } from "../config/env.js";
+import { DetectorWorkerClient } from "../detector/detectorWorkerClient.js";
+import type { DetectedFace, DetectionSnapshot } from "../detector/types.js";
+import { RtspStream } from "../rtsp/rtspStream.js";
+import { buildFaceDescriptor } from "../utils/faceDescriptor.js";
+import { AttendanceService } from "./attendanceService.js";
+import { FaceRegistryService } from "./faceRegistryService.js";
+import { PythonRecognitionClient } from "./pythonRecognitionClient.js";
+import { logger } from "../utils/logger.js";
+
+type ServiceState = "idle" | "starting" | "running" | "stopping" | "error";
+
+export class FaceDetectionService {
+  private readonly events = new EventEmitter();
+  private state: ServiceState = "idle";
+  private stream?: RtspStream;
+  private detector?: DetectorWorkerClient;
+  private readonly registry: FaceRegistryService;
+  private readonly attendance: AttendanceService;
+  private readonly pythonRecognizer?: PythonRecognitionClient;
+  private latestFrame?: Buffer;
+  private latestDetectionFrame?: Buffer;
+  private startedAt?: string;
+  private stoppedAt?: string;
+  private lastError?: string;
+  private lastWorkerState?: string;
+  private lastDetection?: DetectionSnapshot;
+  private lastFaces: DetectedFace[] = [];
+  private detectionCount = 0;
+  private receivedFrames = 0;
+  private acceptedFrames = 0;
+  private detectionStride = 1;
+  private frameModulo = 0;
+  private registeredFacesCount = 0;
+  private pythonBusy = false;
+  private pythonDroppedFrames = 0;
+  private pythonProcessedFrames = 0;
+
+  public constructor(private readonly config: AppEnv = env) {
+    this.registry = new FaceRegistryService(
+      this.config.SNAPSHOT_PATH,
+      this.config.MATCH_THRESHOLD,
+      logger,
+    );
+    this.attendance = new AttendanceService(
+      this.config.SNAPSHOT_PATH,
+      logger,
+      this.config.DETECTION_COOLDOWN_MS,
+    );
+    this.pythonRecognizer =
+      this.config.RECOGNITION_BACKEND === "python"
+        ? new PythonRecognitionClient(this.config.PYTHON_RECOGNIZER_URL)
+        : undefined;
+  }
+
+  public getStatus() {
+    return {
+      state: this.state,
+      startedAt: this.startedAt,
+      stoppedAt: this.stoppedAt,
+      lastError: this.lastError,
+      lastWorkerState: this.lastWorkerState,
+      lastDetection: this.lastDetection,
+      detectionCount: this.detectionCount,
+      frames: {
+        received: this.receivedFrames,
+        accepted: this.acceptedFrames,
+        detector:
+          this.detector?.status ??
+          (this.pythonRecognizer
+            ? {
+                ready: this.lastWorkerState !== "python recognizer unavailable",
+                busy: this.pythonBusy,
+                droppedFrames: this.pythonDroppedFrames,
+                processedFrames: this.pythonProcessedFrames,
+                lastWorkerState: this.lastWorkerState,
+              }
+            : null),
+      },
+      config: {
+        snapshotPath: this.config.SNAPSHOT_PATH,
+        detectionThreshold: this.config.DETECTION_THRESHOLD,
+        matchThreshold: this.config.MATCH_THRESHOLD,
+        frameRate: this.config.FRAME_RATE,
+        streamFrameRate: this.config.STREAM_FRAME_RATE,
+        cooldownMs: this.config.DETECTION_COOLDOWN_MS,
+        recognitionBackend: this.config.RECOGNITION_BACKEND,
+        pythonRecognizerUrl:
+          this.config.RECOGNITION_BACKEND === "python"
+            ? this.config.PYTHON_RECOGNIZER_URL
+            : undefined,
+      },
+      stream: this.stream?.status ?? null,
+      lastFaces: this.lastFaces,
+      registeredFaces: this.registeredFacesCount,
+      attendance: this.attendance.list(),
+    };
+  }
+
+  public onFrame(listener: (frame: Buffer) => void): () => void {
+    this.events.on("frame", listener);
+    return () => this.events.off("frame", listener);
+  }
+
+  public getLatestFrame(): Buffer | undefined {
+    return this.latestFrame;
+  }
+
+  public async listRegisteredFaces() {
+    if (this.pythonRecognizer) {
+      const faces = await this.pythonRecognizer.listFaces();
+      this.registeredFacesCount = faces.length;
+      return faces;
+    }
+    return this.registry.list();
+  }
+
+  public async removeRegisteredFace(label: string): Promise<boolean> {
+    if (this.pythonRecognizer) {
+      const removed = await this.pythonRecognizer.removeFace(label);
+      const faces = await this.pythonRecognizer.listFaces();
+      this.registeredFacesCount = faces.length;
+      return removed;
+    }
+    return this.registry.remove(label);
+  }
+
+  public async clearRegisteredFaces(): Promise<void> {
+    if (this.pythonRecognizer) {
+      await this.pythonRecognizer.clearFaces();
+      this.registeredFacesCount = 0;
+      await this.attendance.load();
+      return;
+    }
+    await this.registry.clear();
+    this.registeredFacesCount = this.registry.count;
+    await this.attendance.load();
+  }
+
+  public async exportAttendanceCsv(): Promise<string> {
+    return this.attendance.exportCsv();
+  }
+
+  public async registerFace(label: string): Promise<{
+    label: string;
+    sampleCount: number;
+    updatedAt: string;
+  }> {
+    if (this.pythonRecognizer) {
+      const frame = this.latestDetectionFrame ?? this.latestFrame;
+      if (!frame) {
+        throw new Error("No camera frame is available yet.");
+      }
+      const registered = await this.pythonRecognizer.register(label, frame);
+      const faces = await this.pythonRecognizer.listFaces();
+      this.registeredFacesCount = faces.length;
+      return registered;
+    }
+
+    const deadline = Date.now() + 2500;
+    const samples: Float32Array[] = [];
+    const seenFrames = new Set<number>();
+
+    const collect = (faces: DetectedFace[]) => {
+      const frame = this.latestDetectionFrame ?? this.latestFrame;
+      if (!frame || !faces.length) {
+        return;
+      }
+
+      const primary = faces[0];
+      if (!primary) {
+        return;
+      }
+      const signature = `${Math.round(primary.box.x)}:${Math.round(primary.box.y)}:${Math.round(primary.box.width)}:${Math.round(primary.box.height)}`;
+      const signatureHash = hashSignature(signature);
+      if (seenFrames.has(signatureHash)) {
+        return;
+      }
+
+      const descriptor = buildFaceDescriptor(frame, primary.box);
+      if (!descriptor) {
+        return;
+      }
+
+      seenFrames.add(signatureHash);
+      samples.push(descriptor);
+    };
+
+    collect(this.lastFaces);
+
+    if (samples.length < 3) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setInterval(() => {
+          collect(this.lastFaces);
+          if (samples.length >= 3) {
+            cleanup();
+            resolve();
+          } else if (Date.now() >= deadline) {
+            cleanup();
+            if (!samples.length) {
+              reject(new Error("No face found in the current frame."));
+            } else {
+              resolve();
+            }
+          }
+        }, 120);
+
+        const cleanup = () => clearInterval(timer);
+      });
+    }
+
+    if (!samples.length) {
+      throw new Error("No face found in the current frame.");
+    }
+
+    const profile = await this.registry.register(label, samples);
+    return {
+      label: profile.label,
+      sampleCount: profile.sampleCount,
+      updatedAt: profile.updatedAt,
+    };
+  }
+
+  public async start(): Promise<void> {
+    if (this.state === "running" || this.state === "starting") {
+      return;
+    }
+
+    this.state = "starting";
+    this.lastError = undefined;
+    await mkdir(this.config.SNAPSHOT_PATH, { recursive: true });
+    await this.registry.load();
+    await this.attendance.load();
+    await this.attendance.ensureFile();
+    if (this.pythonRecognizer) {
+      try {
+        this.registeredFacesCount = (await this.pythonRecognizer.listFaces()).length;
+      } catch (error) {
+        this.registeredFacesCount = 0;
+        this.lastWorkerState = "python recognizer unavailable";
+        logger.warn({ err: error }, "Python recognizer list request failed during startup");
+      }
+    } else {
+      this.registeredFacesCount = this.registry.count;
+    }
+
+    this.detectionStride = Math.max(
+      1,
+      Math.round(this.config.STREAM_FRAME_RATE / this.config.FRAME_RATE),
+    );
+    this.frameModulo = 0;
+
+    this.stream = new RtspStream(this.config, logger);
+    this.stream.on("started", () => {
+      this.state = "running";
+      this.startedAt = new Date().toISOString();
+      this.stoppedAt = undefined;
+      logger.info("RTSP stream started");
+    });
+    this.stream.on("stopped", (code, signal) => {
+      logger.info({ code, signal }, "RTSP stream stopped");
+      if (this.state !== "stopping") {
+        this.state = code === 0 || signal === "SIGTERM" ? "idle" : "error";
+      }
+    });
+    this.stream.on("error", (error) => this.handleError(error));
+    this.stream.on("frame", (frame) => {
+      this.latestFrame = frame;
+      this.events.emit("frame", frame);
+      this.receivedFrames += 1;
+      this.frameModulo = (this.frameModulo + 1) % this.detectionStride;
+
+      if (this.frameModulo !== 0) {
+        return;
+      }
+
+      if (this.pythonRecognizer) {
+        if (this.pythonBusy) {
+          this.pythonDroppedFrames += 1;
+          return;
+        }
+        this.pythonBusy = true;
+        this.latestDetectionFrame = Buffer.from(frame);
+        this.acceptedFrames += 1;
+        void this.handlePythonFrame(frame).finally(() => {
+          this.pythonBusy = false;
+        });
+        return;
+      }
+
+      if (this.detector?.detect(frame)) {
+        this.latestDetectionFrame = Buffer.from(frame);
+        this.acceptedFrames += 1;
+      }
+    });
+
+    if (this.pythonRecognizer) {
+      await this.waitForPythonRecognizerReady();
+    } else {
+      this.detector = new DetectorWorkerClient(
+        {
+          threshold: this.config.DETECTION_THRESHOLD,
+          snapshotPath: this.config.SNAPSHOT_PATH,
+          cooldownMs: this.config.DETECTION_COOLDOWN_MS,
+        },
+        logger,
+      );
+
+      this.detector.on("ready", () => {
+        logger.info("Detector worker ready");
+      });
+      this.detector.on("result", (faces) => {
+        void this.handleDetectorResult(faces);
+      });
+      this.detector.on("state", (value) => {
+        this.lastWorkerState = value;
+        logger.info({ workerState: value }, "Detector worker state");
+      });
+      this.detector.on("detection", (snapshot, faces) => {
+        this.lastDetection = snapshot;
+        this.lastFaces = this.annotateFaces(faces);
+        this.detectionCount += 1;
+      });
+      this.detector.on("error", (error) => this.handleError(error));
+    }
+
+    this.stream.start();
+  }
+
+  public async stop(): Promise<void> {
+    if (this.state === "idle" || this.state === "stopping") {
+      return;
+    }
+
+    this.state = "stopping";
+
+    const stream = this.stream;
+    const detector = this.detector;
+    this.stream = undefined;
+    this.detector = undefined;
+
+    await stream?.stop();
+    await detector?.shutdown();
+
+    this.state = "idle";
+    this.stoppedAt = new Date().toISOString();
+    this.latestFrame = undefined;
+    this.latestDetectionFrame = undefined;
+    this.pythonBusy = false;
+    logger.info("Face detection service stopped");
+  }
+
+  private handleError(error: Error): void {
+    this.lastError = error.message;
+    this.state = "error";
+    logger.error({ err: error }, "Face detection service error");
+  }
+
+  private async handleDetectorResult(faces: DetectedFace[]): Promise<void> {
+    const frame = this.latestDetectionFrame ?? this.latestFrame;
+    if (this.pythonRecognizer && frame) {
+      try {
+        this.lastFaces = await this.pythonRecognizer.recognize(frame);
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.lastWorkerState = "python recognizer error";
+        logger.error({ err: error }, "Python recognizer failed");
+        this.lastFaces = this.annotateFaces(faces);
+      }
+    } else {
+      this.lastFaces = this.annotateFaces(faces);
+    }
+
+    this.events.emit("detection", this.lastFaces);
+    for (const face of this.lastFaces) {
+      if (face.match?.label) {
+        await this.attendance.recordMatch(
+          face.match.label,
+          face.match.confidence,
+          new Date(),
+          this.config.DETECTION_COOLDOWN_MS,
+        );
+      }
+    }
+  }
+
+  private async handlePythonFrame(frame: Buffer): Promise<void> {
+    try {
+      this.lastWorkerState = "python recognizer processing";
+      const response = await this.pythonRecognizer?.recognizeWithMeta(frame);
+      if (!response) {
+        return;
+      }
+
+      this.pythonProcessedFrames += 1;
+      this.lastWorkerState = response.state ?? "python recognizer ready";
+      this.lastFaces = response.faces.map((face) => ({ ...face }));
+      this.events.emit("detection", this.lastFaces);
+
+      if (response.faces.length) {
+        this.detectionCount += 1;
+      }
+
+      if (response.snapshot) {
+        this.lastDetection = response.snapshot;
+        logger.info(
+          {
+            timestamp: response.snapshot.timestamp,
+            confidence: response.snapshot.confidence,
+            snapshot: response.snapshot.path,
+          },
+          "Face detected",
+        );
+      }
+
+      for (const face of this.lastFaces) {
+        if (face.match?.label) {
+          await this.attendance.recordMatch(
+            face.match.label,
+            face.match.confidence,
+            new Date(),
+            this.config.DETECTION_COOLDOWN_MS,
+          );
+        }
+      }
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      this.lastWorkerState = "python recognizer error";
+      logger.error({ err: error }, "Python recognition failed");
+    }
+  }
+
+  private async waitForPythonRecognizerReady(timeoutMs = 30_000): Promise<void> {
+    if (!this.pythonRecognizer) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (await this.pythonRecognizer.health()) {
+        this.lastWorkerState = "python recognizer ready";
+        return;
+      }
+
+      this.lastWorkerState = "python recognizer starting";
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    this.lastWorkerState = "python recognizer unavailable";
+    logger.warn("Python recognizer did not become ready before the timeout");
+  }
+
+  private annotateFaces(faces: DetectedFace[]): DetectedFace[] {
+    const frame = this.latestDetectionFrame ?? this.latestFrame;
+    if (!frame || !faces.length) {
+      return faces;
+    }
+
+    return faces.map((face) => {
+      const descriptor = buildFaceDescriptor(frame, face.box);
+      const match = descriptor ? this.registry.match(descriptor) : null;
+      return {
+        ...face,
+        match: match
+          ? {
+              label: match.label,
+              score: match.score,
+              confidence: match.confidence,
+              sampleCount: match.sampleCount,
+            }
+          : null,
+      };
+    });
+  }
+}
+
+export const faceDetectionService = new FaceDetectionService();
+
+function hashSignature(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return hash;
+}

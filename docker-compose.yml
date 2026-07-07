@@ -1,0 +1,40 @@
+services:
+  face-detection:
+    build: .
+    container_name: rtsp-face-detection
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      RTSP_URL: ${RTSP_URL}
+      SNAPSHOT_PATH: /app/snapshots
+      DETECTION_THRESHOLD: ${DETECTION_THRESHOLD:-0.75}
+      MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.45}
+      RECOGNITION_BACKEND: python
+      PYTHON_RECOGNIZER_URL: http://recognizer:5055
+      PYTHON_DETECTION_THRESHOLD: ${PYTHON_DETECTION_THRESHOLD:-0.5}
+      STREAM_FRAME_RATE: ${STREAM_FRAME_RATE:-10}
+      FRAME_RATE: ${FRAME_RATE:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      - recognizer
+    volumes:
+      - ./snapshots:/app/snapshots
+
+  recognizer:
+    build:
+      context: ./python_recognizer
+    container_name: rtsp-face-recognizer
+    restart: unless-stopped
+    environment:
+      SNAPSHOT_PATH: /app/snapshots
+      FACE_REGISTRY_PATH: /app/snapshots/known-faces-python.json
+      DETECTION_THRESHOLD: ${DETECTION_THRESHOLD:-0.75}
+      PYTHON_DETECTION_THRESHOLD: ${PYTHON_DETECTION_THRESHOLD:-0.5}
+      MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.45}
+      PYTHON_MATCH_THRESHOLD: ${PYTHON_MATCH_THRESHOLD:-0.45}
+      SNAPSHOT_COOLDOWN_MS: 10000
+    volumes:
+      - ./snapshots:/app/snapshots
