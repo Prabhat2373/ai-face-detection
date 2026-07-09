@@ -8,9 +8,20 @@ import { buildFaceDescriptor } from "../utils/faceDescriptor.js";
 import { AttendanceService } from "./attendanceService.js";
 import { FaceRegistryService } from "./faceRegistryService.js";
 import { PythonRecognitionClient } from "./pythonRecognitionClient.js";
+import { UpdateService } from "./updateService.js";
 import { logger } from "../utils/logger.js";
 
 type ServiceState = "idle" | "starting" | "running" | "stopping" | "error";
+
+type CameraConfig = {
+  id: string;
+  name: string;
+  camera_role?: "general" | "check_in" | "check_out";
+  rtsp_url: string;
+  rtsp_username?: string | null;
+  rtsp_password?: string | null;
+  enabled: number;
+};
 
 export class FaceDetectionService {
   private readonly events = new EventEmitter();
@@ -20,6 +31,15 @@ export class FaceDetectionService {
   private readonly registry: FaceRegistryService;
   private readonly attendance: AttendanceService;
   private readonly pythonRecognizer?: PythonRecognitionClient;
+  private readonly updater: UpdateService;
+  private activeCamera?: CameraConfig;
+  private attendanceSnapshot: Array<{
+    label: string;
+    first_appearance: string;
+    last_appearance: string;
+    appearances: number;
+    max_confidence: number;
+  }> = [];
   private latestFrame?: Buffer;
   private latestDetectionFrame?: Buffer;
   private startedAt?: string;
@@ -53,6 +73,7 @@ export class FaceDetectionService {
       this.config.RECOGNITION_BACKEND === "python"
         ? new PythonRecognitionClient(this.config.PYTHON_RECOGNIZER_URL)
         : undefined;
+    this.updater = new UpdateService(this.config, logger);
   }
 
   public getStatus() {
@@ -95,7 +116,8 @@ export class FaceDetectionService {
       stream: this.stream?.status ?? null,
       lastFaces: this.lastFaces,
       registeredFaces: this.registeredFacesCount,
-      attendance: this.attendance.list(),
+      attendance: this.pythonRecognizer ? this.attendanceSnapshot : this.attendance.list(),
+      update: this.updater.getStatus(),
     };
   }
 
@@ -115,6 +137,59 @@ export class FaceDetectionService {
       return faces;
     }
     return this.registry.list();
+  }
+
+  public async listCameras() {
+    if (!this.pythonRecognizer) {
+      return [];
+    }
+    return this.pythonRecognizer.listCameras();
+  }
+
+  public async getCamera(cameraId: string) {
+    if (!this.pythonRecognizer) {
+      return null;
+    }
+    return this.pythonRecognizer.getCamera(cameraId);
+  }
+
+  public async addCamera(camera: {
+    id?: string;
+    name: string;
+    cameraRole?: "general" | "check_in" | "check_out";
+    rtspUrl: string;
+    rtspUsername?: string | null;
+    rtspPassword?: string | null;
+    enabled?: boolean;
+  }) {
+    if (!this.pythonRecognizer) {
+      throw new Error("Camera management requires the Python backend.");
+    }
+    return this.pythonRecognizer.addCamera(camera);
+  }
+
+  public async updateCamera(
+    cameraId: string,
+    camera: {
+      name: string;
+      cameraRole?: "general" | "check_in" | "check_out";
+      rtspUrl: string;
+      rtspUsername?: string | null;
+      rtspPassword?: string | null;
+      enabled?: boolean;
+    },
+  ) {
+    if (!this.pythonRecognizer) {
+      throw new Error("Camera management requires the Python backend.");
+    }
+    return this.pythonRecognizer.updateCamera(cameraId, camera);
+  }
+
+  public async deleteCamera(cameraId: string): Promise<boolean> {
+    if (!this.pythonRecognizer) {
+      return false;
+    }
+    return this.pythonRecognizer.deleteCamera(cameraId);
   }
 
   public async removeRegisteredFace(label: string): Promise<boolean> {
@@ -140,7 +215,18 @@ export class FaceDetectionService {
   }
 
   public async exportAttendanceCsv(): Promise<string> {
+    if (this.pythonRecognizer) {
+      return this.pythonRecognizer.exportAttendanceCsv();
+    }
     return this.attendance.exportCsv();
+  }
+
+  public getUpdateStatus() {
+    return this.updater.getStatus();
+  }
+
+  public async checkForUpdate() {
+    return this.updater.checkOnce();
   }
 
   public async registerFace(label: string): Promise<{
@@ -154,8 +240,7 @@ export class FaceDetectionService {
         throw new Error("No camera frame is available yet.");
       }
       const registered = await this.pythonRecognizer.register(label, frame);
-      const faces = await this.pythonRecognizer.listFaces();
-      this.registeredFacesCount = faces.length;
+      this.registeredFacesCount += 1;
       return registered;
     }
 
@@ -223,7 +308,7 @@ export class FaceDetectionService {
     };
   }
 
-  public async start(): Promise<void> {
+  public async start(cameraId?: string, cameraRole?: "general" | "check_in" | "check_out"): Promise<void> {
     if (this.state === "running" || this.state === "starting") {
       return;
     }
@@ -232,18 +317,24 @@ export class FaceDetectionService {
     this.lastError = undefined;
     await mkdir(this.config.SNAPSHOT_PATH, { recursive: true });
     await this.registry.load();
-    await this.attendance.load();
-    await this.attendance.ensureFile();
     if (this.pythonRecognizer) {
       try {
         this.registeredFacesCount = (await this.pythonRecognizer.listFaces()).length;
+        const camera = await this.resolveCamera(cameraId, cameraRole);
+        this.activeCamera = camera;
+        this.attendanceSnapshot = await this.pythonRecognizer.listAttendance();
+        this.updater.start();
       } catch (error) {
         this.registeredFacesCount = 0;
         this.lastWorkerState = "python recognizer unavailable";
         logger.warn({ err: error }, "Python recognizer list request failed during startup");
+        throw error;
       }
     } else {
+      await this.attendance.load();
+      await this.attendance.ensureFile();
       this.registeredFacesCount = this.registry.count;
+      throw new Error("Camera DB mode requires the Python recognizer service.");
     }
 
     this.detectionStride = Math.max(
@@ -252,7 +343,17 @@ export class FaceDetectionService {
     );
     this.frameModulo = 0;
 
-    this.stream = new RtspStream(this.config, logger);
+    this.stream = new RtspStream(
+      {
+        FFMPEG_PATH: this.config.FFMPEG_PATH,
+        STREAM_FRAME_RATE: this.config.STREAM_FRAME_RATE,
+        MAX_FRAME_BYTES: this.config.MAX_FRAME_BYTES,
+        rtspUrl: this.activeCamera.rtsp_url,
+        rtspUsername: this.activeCamera.rtsp_username,
+        rtspPassword: this.activeCamera.rtsp_password,
+      },
+      logger,
+    );
     this.stream.on("started", () => {
       this.state = "running";
       this.startedAt = new Date().toISOString();
@@ -349,6 +450,7 @@ export class FaceDetectionService {
     this.latestFrame = undefined;
     this.latestDetectionFrame = undefined;
     this.pythonBusy = false;
+    this.updater.stop();
     logger.info("Face detection service stopped");
   }
 
@@ -362,7 +464,11 @@ export class FaceDetectionService {
     const frame = this.latestDetectionFrame ?? this.latestFrame;
     if (this.pythonRecognizer && frame) {
       try {
-        this.lastFaces = await this.pythonRecognizer.recognize(frame);
+        this.lastFaces = await this.pythonRecognizer.recognize(
+          frame,
+          this.activeCamera?.camera_role,
+          this.activeCamera?.id,
+        );
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
         this.lastWorkerState = "python recognizer error";
@@ -389,7 +495,11 @@ export class FaceDetectionService {
   private async handlePythonFrame(frame: Buffer): Promise<void> {
     try {
       this.lastWorkerState = "python recognizer processing";
-      const response = await this.pythonRecognizer?.recognizeWithMeta(frame);
+      const response = await this.pythonRecognizer?.recognizeWithMeta(
+        frame,
+        this.activeCamera?.camera_role,
+        this.activeCamera?.id,
+      );
       if (!response) {
         return;
       }
@@ -416,13 +526,8 @@ export class FaceDetectionService {
       }
 
       for (const face of this.lastFaces) {
-        if (face.match?.label) {
-          await this.attendance.recordMatch(
-            face.match.label,
-            face.match.confidence,
-            new Date(),
-            this.config.DETECTION_COOLDOWN_MS,
-          );
+        if (face.match?.label && this.pythonRecognizer) {
+          this.attendanceSnapshot = await this.pythonRecognizer.listAttendance();
         }
       }
     } catch (error) {
@@ -474,6 +579,43 @@ export class FaceDetectionService {
       };
     });
   }
+
+  private async resolveCamera(
+    cameraId?: string,
+    cameraRole?: "general" | "check_in" | "check_out",
+  ): Promise<CameraConfig> {
+    if (!this.pythonRecognizer) {
+      throw new Error("Python recognizer service is required for camera lookup.");
+    }
+
+    if (cameraRole) {
+      const cameras = await this.pythonRecognizer.listCameras();
+      const roleCamera = cameras.find((camera) => camera.enabled && camera.camera_role === cameraRole);
+      if (!roleCamera) {
+        throw new Error(`No enabled camera found for role: ${cameraRole}`);
+      }
+      return roleCamera as CameraConfig;
+    }
+
+    if (cameraId) {
+      const camera = await this.pythonRecognizer.getCamera(cameraId);
+      if (!camera) {
+        throw new Error(`Camera not found: ${cameraId}`);
+      }
+      if (!camera.enabled) {
+        throw new Error(`Camera is disabled: ${cameraId}`);
+      }
+      return camera as CameraConfig;
+    }
+
+    const cameras = await this.pythonRecognizer.listCameras();
+    const active = cameras.find((camera) => Boolean(camera.enabled));
+    if (!active) {
+      throw new Error("No enabled cameras were found in the database.");
+    }
+    return active as CameraConfig;
+  }
+
 }
 
 export const faceDetectionService = new FaceDetectionService();

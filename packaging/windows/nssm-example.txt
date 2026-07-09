@@ -1,0 +1,5 @@
+nssm install FaceAgent "C:\Program Files\nodejs\node.exe" "C:\FaceAgent\dist\server.js"
+nssm set FaceAgent AppDirectory "C:\FaceAgent"
+nssm set FaceAgent AppEnvironmentExtra NODE_ENV=production
+nssm set FaceAgent AppEnvironmentExtra PYTHON_DB_PATH=C:\FaceAgent\data\app.db
+nssm set FaceAgent Start SERVICE_AUTO_START

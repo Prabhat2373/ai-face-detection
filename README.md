@@ -21,7 +21,6 @@ Production-ready Node.js 22 + TypeScript service that consumes an RTSP CCTV stre
 
 - Node.js 22+
 - FFmpeg available on `PATH`
-- An RTSP camera URL
 - For the Python backend: Python 3.11+ with the `insightface` model downloads available at runtime
 
 ## Configuration
@@ -29,7 +28,6 @@ Production-ready Node.js 22 + TypeScript service that consumes an RTSP CCTV stre
 Copy `.env.example` to `.env` and update values:
 
 ```bash
-RTSP_URL=rtsp://user:password@camera-host:554/stream1
 SNAPSHOT_PATH=./snapshots
 DETECTION_THRESHOLD=0.75
 MATCH_THRESHOLD=0.45
@@ -41,8 +39,6 @@ LOG_LEVEL=info
 
 Required variables:
 
-- `RTSP_URL`: CCTV RTSP stream URL.
-- `RTSP_USERNAME` and `RTSP_PASSWORD`: optional credentials if your camera prompts for login in VLC.
 - `SNAPSHOT_PATH`: Directory where detection snapshots are saved. Defaults to `./snapshots`.
 - `DETECTION_THRESHOLD`: Minimum face confidence from `0` to `1`. Defaults to `0.75`.
 - `MATCH_THRESHOLD`: Minimum descriptor similarity for a known-face match. Defaults to `0.45`.
@@ -52,6 +48,13 @@ Required variables:
 - `PYTHON_RECOGNIZER_URL`: URL of the Python recognizer service. Defaults to `http://localhost:5055`.
 - `PYTHON_DETECTION_THRESHOLD`: Detection confidence threshold used by InsightFace. Defaults to `0.5`.
 - `PYTHON_MATCH_THRESHOLD`: Match threshold used by InsightFace embeddings. Defaults to `0.45`.
+- `PYTHON_DB_PATH`: SQLite database path used by the Python service. Defaults to `./data/app.db`.
+- `SYNC_ENABLED`: Enables background sync attempts from the edge agent. Defaults to `false`.
+- `SYNC_ENDPOINT_URL`: VPS endpoint that receives batched edge events.
+- `SYNC_INTERVAL_MS`: Retry interval for the sync loop. Defaults to `5000`.
+- `AGENT_VERSION`: Current edge agent version string.
+- `AUTO_UPDATE_URL`: Optional version-check endpoint for the updater.
+- `AUTO_UPDATE_INTERVAL_MS`: Update polling interval in milliseconds. Defaults to `60000`.
 
 ## Install
 
@@ -114,13 +117,18 @@ Removes all registered faces.
 
 ### `GET /attendance`
 
-Returns the current attendance rows. The same data is also written to `./snapshots/attendance.csv`.
+Returns the current attendance rows from SQLite.
 
 ## Python backend
 
-The Python service uses InsightFace to do the actual face detection and embedding-based matching. That is the path to use if you want the most robust recognition for changing light, angle, and partial occlusion.
+The Python service uses InsightFace to do the actual face detection and embedding-based matching. Cameras, faces, and attendance all live in SQLite so the system keeps working offline.
 
 When `RECOGNITION_BACKEND=python`, Node sends sampled camera frames to the Python service, which returns face boxes, identities, and snapshots.
+Camera definitions are managed through the Python service's `/cameras` endpoints and are stored in the SQLite database, so new cameras can be added, disabled, or updated without redeploying the app.
+
+## Packaging
+
+See [packaging/README.md](/Users/prabhattambe/Documents/face_detection/packaging/README.md) for the Windows and macOS service scaffolding.
 
 ## Docker
 

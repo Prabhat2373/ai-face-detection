@@ -10,6 +10,9 @@ export declare class FaceDetectionService {
     private readonly registry;
     private readonly attendance;
     private readonly pythonRecognizer?;
+    private readonly updater;
+    private activeCamera?;
+    private attendanceSnapshot;
     private latestFrame?;
     private latestDetectionFrame?;
     private startedAt?;
@@ -63,7 +66,21 @@ export declare class FaceDetectionService {
         } | null;
         lastFaces: DetectedFace[];
         registeredFaces: number;
-        attendance: import("./attendanceService.js").AttendanceRecord[];
+        attendance: import("./attendanceService.js").AttendanceRecord[] | {
+            label: string;
+            first_appearance: string;
+            last_appearance: string;
+            appearances: number;
+            max_confidence: number;
+        }[];
+        update: {
+            enabled: boolean;
+            currentVersion: string;
+            latestVersion?: string;
+            updateAvailable: boolean;
+            lastCheckedAt?: string;
+            lastError?: string;
+        };
     };
     onFrame(listener: (frame: Buffer) => void): () => void;
     getLatestFrame(): Buffer | undefined;
@@ -72,21 +89,98 @@ export declare class FaceDetectionService {
         sampleCount: number;
         updatedAt: string;
     }[]>;
+    listCameras(): Promise<{
+        id: string;
+        name: string;
+        camera_role: "general" | "check_in" | "check_out";
+        rtsp_url: string;
+        rtsp_username?: string | null;
+        rtsp_password?: string | null;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+    }[]>;
+    getCamera(cameraId: string): Promise<{
+        id: string;
+        name: string;
+        camera_role: "general" | "check_in" | "check_out";
+        rtsp_url: string;
+        rtsp_username?: string | null;
+        rtsp_password?: string | null;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+    } | null>;
+    addCamera(camera: {
+        id?: string;
+        name: string;
+        cameraRole?: "general" | "check_in" | "check_out";
+        rtspUrl: string;
+        rtspUsername?: string | null;
+        rtspPassword?: string | null;
+        enabled?: boolean;
+    }): Promise<{
+        id: string;
+        name: string;
+        camera_role: "general" | "check_in" | "check_out";
+        rtsp_url: string;
+        rtsp_username?: string | null;
+        rtsp_password?: string | null;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+    }>;
+    updateCamera(cameraId: string, camera: {
+        name: string;
+        cameraRole?: "general" | "check_in" | "check_out";
+        rtspUrl: string;
+        rtspUsername?: string | null;
+        rtspPassword?: string | null;
+        enabled?: boolean;
+    }): Promise<{
+        id: string;
+        name: string;
+        camera_role: "general" | "check_in" | "check_out";
+        rtsp_url: string;
+        rtsp_username?: string | null;
+        rtsp_password?: string | null;
+        enabled: number;
+        created_at: string;
+        updated_at: string;
+    }>;
+    deleteCamera(cameraId: string): Promise<boolean>;
     removeRegisteredFace(label: string): Promise<boolean>;
     clearRegisteredFaces(): Promise<void>;
     exportAttendanceCsv(): Promise<string>;
+    getUpdateStatus(): {
+        enabled: boolean;
+        currentVersion: string;
+        latestVersion?: string;
+        updateAvailable: boolean;
+        lastCheckedAt?: string;
+        lastError?: string;
+    };
+    checkForUpdate(): Promise<{
+        enabled: boolean;
+        currentVersion: string;
+        latestVersion?: string;
+        updateAvailable: boolean;
+        lastCheckedAt?: string;
+        lastError?: string;
+    }>;
     registerFace(label: string): Promise<{
         label: string;
         sampleCount: number;
         updatedAt: string;
     }>;
-    start(): Promise<void>;
+    start(cameraId?: string, cameraRole?: "general" | "check_in" | "check_out"): Promise<void>;
     stop(): Promise<void>;
     private handleError;
     private handleDetectorResult;
     private handlePythonFrame;
     private waitForPythonRecognizerReady;
     private annotateFaces;
+    private resolveCamera;
 }
 export declare const faceDetectionService: FaceDetectionService;
 export {};

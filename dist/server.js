@@ -6,7 +6,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { env } from "./config/env.js";
 import { faceRoutes } from "./routes/faceRoutes.js";
+import { cameraRoutes } from "./routes/cameraRoutes.js";
 import { detectionRoutes } from "./routes/detectionRoutes.js";
+import { updateRoutes } from "./routes/updateRoutes.js";
 import { healthRoutes } from "./routes/healthRoutes.js";
 import { faceDetectionService } from "./services/faceDetectionService.js";
 import { logger } from "./utils/logger.js";
@@ -39,19 +41,30 @@ app.use("/snapshots", express.static(join(process.cwd(), env.SNAPSHOT_PATH), {
     },
 }));
 app.use(healthRoutes);
+app.use(cameraRoutes);
+app.use(updateRoutes);
 app.use(faceRoutes);
 app.use(detectionRoutes);
 app.get("/favicon.ico", (_req, res) => {
     res.status(204).end();
 });
 app.get("/", async (_req, res, next) => {
+    res.redirect("/live");
+});
+async function sendHtml(fileName, res, next) {
     try {
-        const html = await readFile(join(process.cwd(), "index.html"), "utf8");
+        const html = await readFile(join(process.cwd(), fileName), "utf8");
         res.type("html").send(html);
     }
     catch (error) {
         next(error);
     }
+}
+app.get("/live", async (_req, res, next) => {
+    await sendHtml("index.html", res, next);
+});
+app.get("/admin", async (_req, res, next) => {
+    await sendHtml("admin.html", res, next);
 });
 const errorHandler = (error, _req, res, _next) => {
     const normalized = error instanceof Error ? error : new Error(String(error));

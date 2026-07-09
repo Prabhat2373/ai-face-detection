@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Panel</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08111f;
+        --bg-2: #0d1728;
+        --panel: #101a2c;
+        --panel-2: #16233d;
+        --text: #edf3ff;
+        --muted: #9badc8;
+        --line: rgba(155, 173, 200, 0.18);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: linear-gradient(180deg, var(--bg), var(--bg-2)); color: var(--text); }
+      .shell { max-width: 1600px; margin: 0 auto; padding: 18px; }
+      .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+      h1 { margin: 0; font-size: 30px; }
+      .subtle, .small { color: var(--muted); }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      button, input, select, textarea {
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font: inherit;
+      }
+      button { cursor: pointer; font-weight: 600; }
+      button.primary { background: linear-gradient(135deg, #0f766e, #2563eb); border-color: transparent; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .panel { background: rgba(16, 26, 44, 0.92); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+      .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .faces { display: grid; gap: 10px; }
+      .camera-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+      .camera-card, .queue-row, .face, .attendance-row { background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+      .section-title, .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .stack { display: grid; gap: 10px; }
+      .columns-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions-inline { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #cbd5e1; }
+      .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700; background: rgba(96, 165, 250, 0.16); color: #bfdbfe; }
+      .small { font-size: 12px; }
+      @media (max-width: 960px) {
+        .grid, .camera-grid, .columns-2 { grid-template-columns: 1fr; }
+        .topbar, .row { flex-direction: column; align-items: flex-start; }
+      }
+    </style>
+  </head>
+  <body data-page="admin">
+    <main class="shell">
+      <div class="topbar">
+        <div>
+          <h1>Admin Panel</h1>
+          <div class="subtle">Cameras, attendance, sync queue, and update controls</div>
+        </div>
+        <div class="actions">
+          <a href="/live">Live detection</a>
+          <button id="syncBtn">Refresh sync</button>
+          <button id="checkUpdateBtn">Check updates</button>
+        </div>
+      </div>
+
+      <section class="grid">
+        <div class="panel stack">
+          <div class="section-title">
+            <div class="label">Camera Manager</div>
+            <div class="small" id="syncStatus">sync unknown</div>
+          </div>
+          <form id="cameraForm" class="stack">
+            <input type="hidden" name="id" />
+            <div class="columns-2">
+              <input name="name" placeholder="Camera name" />
+              <select name="cameraRole" aria-label="Camera role">
+                <option value="general">General</option>
+                <option value="check_in">Check in</option>
+                <option value="check_out">Check out</option>
+              </select>
+            </div>
+            <div class="columns-2">
+              <input name="rtspUrl" placeholder="RTSP URL" />
+              <input name="rtspUsername" placeholder="RTSP username" />
+            </div>
+            <div class="columns-2">
+              <input name="rtspPassword" placeholder="RTSP password" type="password" />
+              <label class="small"><input type="checkbox" name="enabled" checked /> Enabled</label>
+            </div>
+            <div class="actions">
+              <button type="submit" class="primary">Save camera</button>
+              <button type="button" id="syncNowBtn">Sync now</button>
+              <button type="button" id="refreshCamerasBtn">Refresh cameras</button>
+            </div>
+          </form>
+          <div class="row">
+            <div class="small">Pending sync: <span id="syncPending">0</span></div>
+            <select id="cameraSelect" aria-label="Select camera"></select>
+          </div>
+          <div class="camera-grid" id="cameraList"></div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Sync Queue</div>
+            <pre id="syncQueue"></pre>
+          </div>
+        </div>
+
+        <div class="panel stack">
+          <div class="section-title">
+            <div class="label">Attendance</div>
+            <div class="actions">
+              <button id="downloadCsvBtn">Download CSV</button>
+              <button id="refreshAttendanceBtn">Refresh attendance</button>
+            </div>
+          </div>
+          <div class="faces" id="attendanceList"></div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Updater</div>
+            <div class="small" id="updateStatus">update unknown</div>
+          </div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Raw Status</div>
+            <pre id="raw"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

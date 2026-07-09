@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { createReadStream } from "node:fs";
 import { z } from "zod";
 import { faceDetectionService } from "../services/faceDetectionService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -18,11 +17,11 @@ faceRoutes.get("/attendance", asyncHandler(async (_req, res) => {
     });
 }));
 faceRoutes.get("/attendance.csv", asyncHandler(async (_req, res) => {
-    const filePath = await faceDetectionService.exportAttendanceCsv();
+    const csv = await faceDetectionService.exportAttendanceCsv();
     res.status(200);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="attendance.csv"');
-    createReadStream(filePath).pipe(res);
+    res.send(csv);
 }));
 faceRoutes.post("/faces/register", asyncHandler(async (req, res) => {
     const parsed = registerSchema.safeParse(req.body);

@@ -1,30 +1,59 @@
 (function () {
   const API_BASE = window.location.origin;
-  const stream = document.getElementById("stream");
-  const canvas = document.getElementById("overlay");
-  const ctx = canvas.getContext("2d");
-  const stateEl = document.getElementById("state");
-  const detectionsEl = document.getElementById("detections");
-  const framesEl = document.getElementById("frames");
-  const registeredCountEl = document.getElementById("registeredCount");
-  const lastFaceEl = document.getElementById("lastFace");
-  const facesEl = document.getElementById("faces");
-  const rawEl = document.getElementById("raw");
-  const startBtn = document.getElementById("startBtn");
-  const stopBtn = document.getElementById("stopBtn");
-  const registerBtn = document.getElementById("registerBtn");
-  const clearBtn = document.getElementById("clearBtn");
-  const personNameEl = document.getElementById("personName");
-  const recognitionTextEl = document.getElementById("recognitionText");
-  const recognitionDotEl = document.querySelector(".match-dot");
-  const knownCountEl = document.getElementById("knownCount");
+  const pageType = document.body?.dataset?.page || "live";
+  const isLivePage = pageType === "live";
+  const isAdminPage = pageType === "admin";
+
+  const el = (id) => document.getElementById(id);
+  const stream = el("stream");
+  const canvas = el("overlay");
+  const ctx = canvas?.getContext?.("2d") ?? null;
+
+  const stateEl = el("state");
+  const detectionsEl = el("detections");
+  const framesEl = el("frames");
+  const registeredCountEl = el("registeredCount");
+  const lastFaceEl = el("lastFace");
+  const facesEl = el("faces");
+  const rawEl = el("raw");
+  const startBtn = el("startBtn");
+  const stopBtn = el("stopBtn");
+  const registerBtn = el("registerBtn");
+  const clearBtn = el("clearBtn");
+  const personNameEl = el("personName");
+  const recognitionTextEl = el("recognitionText");
+  const recognitionDotEl = el("recognitionDot");
+  const knownCountEl = el("knownCount");
+  const attendanceListEl = el("attendanceList");
+  const cameraSelectEl = el("cameraSelect");
+  const cameraRoleEl = el("cameraRole");
+  const refreshCamerasBtn = el("refreshCamerasBtn");
+  const cameraFormEl = el("cameraForm");
+  const cameraListEl = el("cameraList");
+  const syncStatusEl = el("syncStatus");
+  const syncPendingEl = el("syncPending");
+  const syncBtn = el("syncBtn");
+  const syncNowBtn = el("syncNowBtn");
+  const syncQueueEl = el("syncQueue");
+  const checkUpdateBtn = el("checkUpdateBtn");
+  const updateStatusEl = el("updateStatus");
+  const downloadCsvBtn = el("downloadCsvBtn");
+  const refreshAttendanceBtn = el("refreshAttendanceBtn");
 
   let latestStatus = null;
+  let cameras = [];
+  let syncState = null;
+  let latestAttendance = [];
 
-  stream.crossOrigin = "anonymous";
-  stream.src = `${API_BASE}/stream.mjpg`;
+  if (stream) {
+    stream.crossOrigin = "anonymous";
+    stream.src = `${API_BASE}/stream.mjpg`;
+  }
 
   function resizeCanvas() {
+    if (!stream || !canvas || !ctx) {
+      return { width: 0, height: 0 };
+    }
     const rect = stream.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     canvas.width = rect.width * dpr;
@@ -35,16 +64,32 @@
     return { width: rect.width, height: rect.height };
   }
 
+  function setPill(node, value) {
+    node.textContent = value;
+    node.className = `pill ${value}`;
+  }
+
+  function activeCameraId() {
+    return cameraSelectEl.value || null;
+  }
+
+  function activeCameraRole() {
+    return cameraRoleEl?.value || null;
+  }
+
   function renderState() {
     const state = latestStatus?.state || "idle";
-    stateEl.textContent = state;
-    stateEl.className = `pill ${state}`;
+    setPill(stateEl, state);
     detectionsEl.textContent = latestStatus?.detectionCount || 0;
     framesEl.textContent = `${latestStatus?.frames?.received || 0} / ${latestStatus?.frames?.accepted || 0}`;
     registeredCountEl.textContent = latestStatus?.registeredFaces || 0;
     const faces = latestStatus?.lastFaces || [];
     const known = faces.find((face) => face?.match?.label);
-    lastFaceEl.textContent = known ? "Known" : faces.length ? "Unknown" : "-";
+    lastFaceEl.textContent = known
+      ? `Known: ${known.match.label}`
+      : faces.length
+        ? "Unknown"
+        : "-";
     rawEl.textContent = JSON.stringify(latestStatus, null, 2);
   }
 
@@ -61,7 +106,7 @@
         return `
           <div class="face">
             <div><strong>${Math.round((face.confidence || 0) * 100)}%</strong> confidence</div>
-            <div>${JSON.stringify(face.box)}</div>
+            <div class="small">${JSON.stringify(face.box)}</div>
             <div class="match">
               <span class="match-dot ${known ? "known" : ""}"></span>
               <span>${known ? `Known: ${face.match.label}` : "Unknown"}</span>
@@ -73,6 +118,9 @@
   }
 
   function drawServerDetections() {
+    if (!isLivePage || !stream || !canvas || !ctx) {
+      return;
+    }
     const faces = latestStatus?.lastFaces || [];
     const { width, height } = resizeCanvas();
     ctx.clearRect(0, 0, width, height);
@@ -114,12 +162,148 @@
     });
   }
 
+  function renderCameras() {
+    const options = cameras
+      .map(
+        (camera) =>
+          `<option value="${camera.id}">${camera.name} ${camera.enabled ? "" : "(disabled)"}</option>`,
+      )
+      .join("");
+    cameraSelectEl.innerHTML = `<option value="">Auto select</option>${options}`;
+
+    cameraListEl.innerHTML = cameras.length
+      ? cameras
+          .map(
+            (camera) => `
+          <div class="camera-card">
+                <div>
+                  <div><strong>${camera.name}</strong></div>
+                  <div class="small">Role: ${camera.camera_role || "general"}</div>
+                  <div class="small">${camera.rtsp_url}</div>
+                  <div class="small">${camera.enabled ? "Enabled" : "Disabled"}</div>
+                </div>
+                <div class="actions-inline">
+                  <button data-camera-edit="${camera.id}">Edit</button>
+                  <button data-camera-delete="${camera.id}">Delete</button>
+                </div>
+              </div>
+            `,
+          )
+          .join("")
+      : '<div class="small">No cameras saved yet.</div>';
+
+    cameraListEl.querySelectorAll("[data-camera-edit]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const camera = cameras.find(
+          (item) => item.id === button.getAttribute("data-camera-edit"),
+        );
+        if (!camera) return;
+        cameraFormEl.elements.namedItem("id").value = camera.id;
+        cameraFormEl.elements.namedItem("name").value = camera.name;
+        cameraFormEl.elements.namedItem("cameraRole").value =
+          camera.camera_role || "general";
+        cameraFormEl.elements.namedItem("rtspUrl").value = camera.rtsp_url;
+        cameraFormEl.elements.namedItem("rtspUsername").value =
+          camera.rtsp_username || "";
+        cameraFormEl.elements.namedItem("rtspPassword").value =
+          camera.rtsp_password || "";
+        cameraFormEl.elements.namedItem("enabled").checked = Boolean(
+          camera.enabled,
+        );
+      });
+    });
+
+    cameraListEl.querySelectorAll("[data-camera-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const cameraId = button.getAttribute("data-camera-delete");
+        if (!cameraId) return;
+        await postJson(
+          `${API_BASE}/cameras/${encodeURIComponent(cameraId)}`,
+          null,
+          "DELETE",
+        );
+        await loadCameras();
+      });
+    });
+  }
+
+  function renderSync() {
+    syncStatusEl.textContent = syncState?.enabled ? "Enabled" : "Disabled";
+    syncPendingEl.textContent = String(syncState?.pending ?? 0);
+    syncQueueEl.textContent = JSON.stringify(syncState, null, 2);
+    const update = latestStatus?.update || {};
+    updateStatusEl.textContent = update.enabled
+      ? update.updateAvailable
+        ? `Update available: ${update.latestVersion || "unknown"}`
+        : `Current: ${update.currentVersion || "unknown"}`
+      : "Updater disabled";
+  }
+
+  function formatDateTime(value) {
+    if (!value) {
+      return "-";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "medium",
+    }).format(date);
+  }
+
+  function formatRole(role) {
+    if (!role) {
+      return "general";
+    }
+    return String(role).replaceAll("_", " ");
+  }
+
+  function renderAttendance() {
+    if (!attendanceListEl) {
+      return;
+    }
+
+    if (!latestAttendance.length) {
+      attendanceListEl.innerHTML =
+        '<div class="small">No attendance records yet.</div>';
+      return;
+    }
+
+    attendanceListEl.innerHTML = latestAttendance
+      .map(
+        (row) => `
+          <div class="attendance-row">
+            <div class="row">
+              <div>
+                <div><strong>${row.label}</strong></div>
+                <div class="small">Appearances: ${row.appearances}</div>
+              </div>
+              <div class="pill">${Math.round((row.max_confidence || 0) * 100)}%</div>
+            </div>
+            <div style="font-size: 16px" class="small">Check in role: ${formatRole(row.first_camera_role)}</div>
+            <div style="font-size: 16px" class="small">Check out role: ${formatRole(row.last_camera_role)}</div>
+            <div style="font-size: 16px" class="small">First appearance: ${formatDateTime(row.first_appearance)}</div>
+            <div style="font-size: 16px" class="small">Last appearance: ${formatDateTime(row.last_appearance)}</div>
+            <div style="font-size: 16px" class="small">Raw first: ${row.first_appearance}</div>
+            <div class="small">Raw last: ${row.last_appearance}</div>
+          </div>
+        `,
+      )
+      .join("");
+  }
+
   async function fetchStatus() {
     const response = await fetch(`${API_BASE}/status`, { cache: "no-store" });
     latestStatus = await response.json();
     const faces = latestStatus?.lastFaces || [];
     const known = faces.find((face) => face?.match?.label);
-    recognitionTextEl.textContent = known ? `Known: ${known.match.label}` : "Unknown";
+    recognitionTextEl.textContent = known
+      ? `Known: ${known.match.label}`
+      : "Unknown";
     recognitionDotEl.className = `match-dot ${known ? "known" : ""}`;
     knownCountEl.textContent = `${latestStatus?.registeredFaces || 0} registered face${(latestStatus?.registeredFaces || 0) === 1 ? "" : "s"}`;
     renderState();
@@ -127,59 +311,191 @@
     drawServerDetections();
   }
 
-  async function postJson(url, body) {
+  async function loadCameras() {
+    if (!cameraListEl || !cameraSelectEl) {
+      return;
+    }
+    const response = await fetch(`${API_BASE}/cameras`, { cache: "no-store" });
+    const payload = await response.json();
+    cameras = payload.cameras || [];
+    renderCameras();
+  }
+
+  async function loadSyncStatus() {
+    const response = await fetch(`${API_BASE}/sync/status`, {
+      cache: "no-store",
+    });
+    syncState = await response.json();
+    renderSync();
+  }
+
+  async function loadAttendance() {
+    if (!attendanceListEl) {
+      return;
+    }
+    const response = await fetch(`${API_BASE}/attendance`, {
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    latestAttendance = payload.attendance || [];
+    renderAttendance();
+  }
+
+  async function postJson(url, body, method = "POST") {
     const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || payload.message || `Request failed: ${response.status}`);
+      throw new Error(
+        payload.error ||
+          payload.message ||
+          `Request failed: ${response.status}`,
+      );
     }
 
     return response.json().catch(() => ({}));
   }
 
-  startBtn.addEventListener("click", async () => {
-    await postJson(`${API_BASE}/start`);
-    await fetchStatus();
-  });
+  if (isLivePage && startBtn) {
+    startBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/start`, {
+        cameraId: activeCameraId(),
+        cameraRole: activeCameraRole(),
+      });
+      await Promise.all([fetchStatus(), loadSyncStatus()]);
+    });
+  }
 
-  stopBtn.addEventListener("click", async () => {
-    await postJson(`${API_BASE}/stop`);
-    await fetchStatus();
-  });
-
-  registerBtn.addEventListener("click", async () => {
-    const label = personNameEl.value.trim();
-    if (!label) {
-      alert("Enter a name first.");
-      return;
-    }
-
-    try {
-      registerBtn.disabled = true;
-      await postJson(`${API_BASE}/faces/register`, { label });
-      personNameEl.value = "";
+  if (isLivePage && stopBtn) {
+    stopBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/stop`);
       await fetchStatus();
-    } catch (error) {
-      alert(error.message || "Registration failed");
-    } finally {
-      registerBtn.disabled = false;
+    });
+  }
+
+  if (isLivePage && registerBtn) {
+    registerBtn.addEventListener("click", async () => {
+      const label = personNameEl.value.trim();
+      if (!label) {
+        alert("Enter a name first.");
+        return;
+      }
+
+      try {
+        registerBtn.disabled = true;
+        await postJson(`${API_BASE}/faces/register`, { label });
+        personNameEl.value = "";
+        await fetchStatus();
+      } catch (error) {
+        alert(error.message || "Registration failed");
+      } finally {
+        registerBtn.disabled = false;
+      }
+    });
+  }
+
+  if (isLivePage && clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/faces/clear`);
+      await fetchStatus();
+    });
+  }
+
+  if (refreshCamerasBtn) {
+    refreshCamerasBtn.addEventListener("click", loadCameras);
+  }
+
+  if (syncBtn) {
+    syncBtn.addEventListener("click", loadSyncStatus);
+  }
+
+  if (syncNowBtn) {
+    syncNowBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/sync/run`);
+      await loadSyncStatus();
+    });
+  }
+
+  if (checkUpdateBtn) {
+    checkUpdateBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/update/check`);
+      await fetchStatus();
+    });
+  }
+
+  if (isAdminPage && downloadCsvBtn) {
+    downloadCsvBtn.addEventListener("click", () => {
+      window.location.href = `${API_BASE}/attendance.csv`;
+    });
+  }
+
+  if (isAdminPage && refreshAttendanceBtn) {
+    refreshAttendanceBtn.addEventListener("click", loadAttendance);
+  }
+
+  if (isAdminPage && cameraFormEl) {
+    cameraFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(cameraFormEl);
+      const payload = {
+        id: formData.get("id") || undefined,
+        name: String(formData.get("name") || "").trim(),
+        cameraRole:
+          String(formData.get("cameraRole") || "general").trim() || "general",
+        rtspUrl: String(formData.get("rtspUrl") || "").trim(),
+        rtspUsername: String(formData.get("rtspUsername") || "").trim() || null,
+        rtspPassword: String(formData.get("rtspPassword") || "").trim() || null,
+        enabled: formData.get("enabled") === "on",
+      };
+
+      const cameraId = String(payload.id || "").trim();
+      if (!payload.name || !payload.rtspUrl) {
+        alert("Camera name and RTSP URL are required.");
+        return;
+      }
+
+      if (cameraId) {
+        await postJson(
+          `${API_BASE}/cameras/${encodeURIComponent(cameraId)}`,
+          payload,
+          "PUT",
+        );
+      } else {
+        await postJson(`${API_BASE}/cameras`, payload);
+      }
+      cameraFormEl.reset();
+      await loadCameras();
+    });
+  }
+
+  if (isLivePage && stream) {
+    stream.addEventListener("load", drawServerDetections);
+  }
+  if (isLivePage) {
+    window.addEventListener("resize", drawServerDetections);
+  }
+
+  setInterval(async () => {
+    const tasks = [loadSyncStatus()];
+    if (isLivePage) {
+      tasks.unshift(fetchStatus(), loadCameras());
     }
-  });
+    if (isAdminPage) {
+      tasks.push(loadAttendance());
+    }
+    await Promise.allSettled(tasks);
+  }, 2000);
 
-  clearBtn.addEventListener("click", async () => {
-    await postJson(`${API_BASE}/faces/clear`);
-    await fetchStatus();
-  });
-
-  stream.addEventListener("load", drawServerDetections);
-  window.addEventListener("resize", drawServerDetections);
-  setInterval(fetchStatus, 1000);
-  void fetchStatus();
+  const bootTasks = [loadSyncStatus()];
+  if (isLivePage) {
+    bootTasks.push(fetchStatus(), loadCameras());
+  }
+  if (isAdminPage) {
+    bootTasks.push(loadAttendance(), loadCameras());
+  }
+  void Promise.allSettled(bootTasks);
 })();

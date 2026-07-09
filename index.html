@@ -3,33 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Live Face Detection</title>
+    <title>Live Detection</title>
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b1220;
-        --panel: #111a2e;
-        --panel-2: #16213a;
-        --text: #e8eefc;
-        --muted: #94a3b8;
-        --line: rgba(148, 163, 184, 0.2);
-        --accent: #5eead4;
-        --danger: #f87171;
+        --bg: #08111f;
+        --bg-2: #0d1728;
+        --panel: #101a2c;
+        --panel-2: #16233d;
+        --text: #edf3ff;
+        --muted: #9badc8;
+        --line: rgba(155, 173, 200, 0.18);
+        --accent: #66e0c7;
+        --danger: #fb7185;
         --warn: #fbbf24;
       }
       * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-      }
-      .shell { max-width: 1440px; margin: 0 auto; padding: 20px; }
-      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
-      h1 { margin: 0; font-size: 28px; }
-      .subtle { color: var(--muted); font-size: 14px; margin-top: 4px; }
+      body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: linear-gradient(180deg, var(--bg), var(--bg-2)); color: var(--text); }
+      .shell { max-width: 1600px; margin: 0 auto; padding: 18px; }
+      .topbar, .row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+      .topbar { margin-bottom: 14px; }
+      h1 { margin: 0; font-size: 30px; }
+      .subtle, .small { color: var(--muted); }
       .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-      button, input {
+      button, input, select, textarea {
         border: 1px solid var(--line);
         background: var(--panel-2);
         color: var(--text);
@@ -40,42 +37,53 @@
       button { cursor: pointer; font-weight: 600; }
       button.primary { background: linear-gradient(135deg, #0f766e, #2563eb); border-color: transparent; }
       .status-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
-      .panel { background: rgba(17, 26, 46, 0.92); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+      .panel { background: rgba(16, 26, 44, 0.92); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
       .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
       .value { font-size: 20px; font-weight: 700; margin-top: 6px; }
       .viewer { position: relative; background: #050b14; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
       .viewer img, .viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
       .overlay { pointer-events: none; }
-      .lower { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; margin-top: 16px; }
+      .grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 16px; margin-top: 16px; }
+      .face, .camera-card, .queue-row { background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
       .faces { display: grid; gap: 10px; }
-      .face { background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
-      pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #cbd5e1; }
       .match { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; font-weight: 700; }
       .match-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--warn); box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.16); }
       .match-dot.known { background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.16); }
       .register-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px; align-items: center; margin-bottom: 12px; }
+      .section-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
       .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
       .pill.running { background: rgba(34, 197, 94, 0.15); color: #86efac; }
       .pill.error { background: rgba(248, 113, 113, 0.15); color: #fca5a5; }
       .pill.idle { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
-      .small { font-size: 12px; color: var(--muted); }
+      .pill.sync { background: rgba(96, 165, 250, 0.16); color: #bfdbfe; }
+      .small { font-size: 12px; }
+      .stack { display: grid; gap: 10px; }
+      .columns-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions-inline { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
       @media (max-width: 960px) {
-        .status-row, .lower { grid-template-columns: 1fr; }
-        .topbar { flex-direction: column; align-items: flex-start; }
-        .register-row { grid-template-columns: 1fr; }
+        .status-row, .grid, .register-row, .columns-2 { grid-template-columns: 1fr; }
+        .topbar, .row { flex-direction: column; align-items: flex-start; }
       }
     </style>
   </head>
-  <body>
+  <body data-page="live">
     <main class="shell">
       <div class="topbar">
         <div>
-          <h1>Live Face Detection</h1>
+          <h1>Live Detection</h1>
           <div class="subtle">RTSP feed, backend face matching, and live boxes</div>
         </div>
         <div class="actions">
+          <select id="cameraSelect" aria-label="Select camera"></select>
+          <select id="cameraRole" aria-label="Select camera role">
+            <option value="">Any role</option>
+            <option value="check_in">Check in</option>
+            <option value="check_out">Check out</option>
+            <option value="general">General</option>
+          </select>
           <button class="primary" id="startBtn">Start</button>
           <button id="stopBtn">Stop</button>
+          <a class="button" href="/admin">Admin panel</a>
         </div>
       </div>
 
@@ -92,27 +100,51 @@
         <canvas id="overlay" class="overlay"></canvas>
       </section>
 
-      <section class="lower">
+      <section class="grid">
         <div class="panel">
-          <div class="label">Detected Faces</div>
+          <div class="section-title">
+            <div class="label">Detected Faces</div>
+            <div class="actions">
+              <button class="ghost" id="refreshCamerasBtn">Refresh cameras</button>
+            </div>
+          </div>
           <div class="register-row">
             <input id="personName" placeholder="Known face name" />
             <button id="registerBtn">Register face</button>
             <button id="clearBtn">Clear saved</button>
-            <div id="recognitionState" class="match">
-              <span class="match-dot"></span>
-              <span id="recognitionText">Unknown</span>
-            </div>
+            <div id="recognitionState" class="match"><span id="recognitionDot" class="match-dot"></span><span id="recognitionText">Unknown</span></div>
           </div>
           <div class="faces" id="faces">No faces yet</div>
           <div class="small" id="knownCount"></div>
         </div>
-        <div class="panel">
-          <div class="label">Raw Status</div>
-          <pre id="raw"></pre>
+
+        <div class="panel stack">
+          <div class="section-title">
+            <div class="label">System Sync</div>
+            <div class="small" id="syncStatus">sync unknown</div>
+          </div>
+          <div class="row">
+            <div class="small">Pending sync: <span id="syncPending">0</span></div>
+            <div class="actions-inline">
+              <button id="syncBtn">Refresh sync</button>
+              <button id="checkUpdateBtn">Check updates</button>
+            </div>
+          </div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Updater</div>
+            <div class="small" id="updateStatus">update unknown</div>
+          </div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Sync Queue</div>
+            <pre id="syncQueue"></pre>
+          </div>
+          <div class="panel" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Raw Status</div>
+            <pre id="raw"></pre>
+          </div>
         </div>
       </section>
     </main>
     <script src="/app.js" defer></script>
   </body>
-  </html>
+</html>

@@ -18,7 +18,11 @@ export declare class RtspStream extends EventEmitter {
     private ffmpeg?;
     private readonly extractor;
     private lastState?;
-    constructor(config: Pick<AppEnv, "RTSP_URL" | "FFMPEG_PATH" | "STREAM_FRAME_RATE" | "MAX_FRAME_BYTES">, log: typeof logger);
+    constructor(config: Pick<AppEnv, "FFMPEG_PATH" | "STREAM_FRAME_RATE" | "MAX_FRAME_BYTES"> & {
+        rtspUrl: string;
+        rtspUsername?: string | null;
+        rtspPassword?: string | null;
+    }, log: typeof logger);
     get running(): boolean;
     get status(): {
         running: boolean;

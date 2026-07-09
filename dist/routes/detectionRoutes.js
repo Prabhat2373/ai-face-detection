@@ -1,7 +1,12 @@
 import { Router } from "express";
+import { z } from "zod";
 import { faceDetectionService } from "../services/faceDetectionService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 export const detectionRoutes = Router();
+const startSchema = z.object({
+    cameraId: z.string().trim().min(1).optional(),
+    cameraRole: z.enum(["general", "check_in", "check_out"]).optional(),
+}).optional();
 function formatBoundary(frame) {
     return Buffer.from(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
 }
@@ -9,7 +14,8 @@ detectionRoutes.get("/status", (_req, res) => {
     res.json(faceDetectionService.getStatus());
 });
 detectionRoutes.post("/start", asyncHandler(async (_req, res) => {
-    await faceDetectionService.start();
+    const parsed = startSchema.safeParse(_req.body);
+    await faceDetectionService.start(parsed.success ? parsed.data?.cameraId : undefined, parsed.success ? parsed.data?.cameraRole : undefined);
     res.status(202).json(faceDetectionService.getStatus());
 }));
 detectionRoutes.post("/stop", asyncHandler(async (_req, res) => {

@@ -96,15 +96,15 @@ export class RtspStream extends EventEmitter {
         });
     }
     safeArgs(args) {
-        const rawUrl = this.config.RTSP_URL;
+        const rawUrl = this.config.rtspUrl;
         const authenticatedUrl = this.buildRtspUrl();
         return args.map((arg) => arg === rawUrl || arg === authenticatedUrl ? "[RTSP_URL]" : arg);
     }
     buildRtspUrl() {
         try {
-            const url = new URL(this.config.RTSP_URL);
-            const username = process.env.RTSP_USERNAME?.trim();
-            const password = process.env.RTSP_PASSWORD?.trim();
+            const url = new URL(this.config.rtspUrl);
+            const username = this.config.rtspUsername?.trim();
+            const password = this.config.rtspPassword?.trim();
             if (username) {
                 url.username = encodeURIComponent(username);
             }
@@ -114,7 +114,7 @@ export class RtspStream extends EventEmitter {
             return url.toString();
         }
         catch {
-            return this.config.RTSP_URL;
+            return this.config.rtspUrl;
         }
     }
 }
