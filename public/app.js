@@ -27,6 +27,7 @@
   const attendanceListEl = el("attendanceList");
   const cameraSelectEl = el("cameraSelect");
   const cameraRoleEl = el("cameraRole");
+  const cameraWallEl = el("cameraWall");
   const refreshCamerasBtn = el("refreshCamerasBtn");
   const cameraFormEl = el("cameraForm");
   const cameraListEl = el("cameraList");
@@ -47,9 +48,30 @@
   let lastAlarmAt = 0;
   let alarmAudio = null;
 
-  if (stream) {
+  function buildStreamUrl(params = {}) {
+    const url = new URL("/stream.mjpg", API_BASE);
+    if (params.cameraId) {
+      url.searchParams.set("cameraId", params.cameraId);
+    }
+    if (params.cameraRole) {
+      url.searchParams.set("cameraRole", params.cameraRole);
+    }
+    return url.toString();
+  }
+
+  function refreshMainStream() {
+    if (!stream) {
+      return;
+    }
     stream.crossOrigin = "anonymous";
-    stream.src = `${API_BASE}/stream.mjpg`;
+    stream.src = buildStreamUrl({
+      cameraId: activeCameraId() || undefined,
+      cameraRole: activeCameraId() ? undefined : activeCameraRole() || undefined,
+    });
+  }
+
+  if (stream) {
+    refreshMainStream();
   }
 
   function resizeCanvas() {
@@ -168,6 +190,10 @@
   }
 
   function renderCameras() {
+    if (!cameraSelectEl) {
+      return;
+    }
+
     const options = cameras
       .map(
         (camera) =>
@@ -175,6 +201,10 @@
       )
       .join("");
     cameraSelectEl.innerHTML = `<option value="">Auto select</option>${options}`;
+
+    if (!cameraListEl) {
+      return;
+    }
 
     cameraListEl.innerHTML = cameras.length
       ? cameras
@@ -228,6 +258,94 @@
           "DELETE",
         );
         await loadCameras();
+      });
+    });
+  }
+
+  function renderCameraWall() {
+    if (!cameraWallEl) {
+      return;
+    }
+
+    const cameraStatuses = Array.isArray(latestStatus?.cameras) ? latestStatus.cameras : [];
+    const enabled = cameras.filter((camera) => camera.enabled);
+    if (!enabled.length) {
+      cameraWallEl.innerHTML = '<div class="small">No enabled cameras available.</div>';
+      return;
+    }
+
+    cameraWallEl.innerHTML = enabled
+      .map(
+        (camera) => `
+          <div class="camera-feed">
+            <div class="row">
+              <div>
+                <div><strong>${camera.name}</strong></div>
+                <div class="small">Role: ${camera.camera_role || "general"}</div>
+              </div>
+              <div class="small">${camera.id}</div>
+            </div>
+            <div class="camera-stage">
+              <img data-camera-stream="${camera.id}" src="${buildStreamUrl({ cameraId: camera.id })}" alt="${camera.name} stream" loading="lazy" />
+              <canvas data-camera-overlay="${camera.id}"></canvas>
+            </div>
+            <div class="small">${cameraStatuses.find((item) => item.id === camera.id)?.stream?.running ? "Running" : "Connecting"}</div>
+          </div>
+        `,
+      )
+      .join("");
+
+    cameraWallEl.querySelectorAll("[data-camera-overlay]").forEach((node) => {
+      const cameraId = node.getAttribute("data-camera-overlay");
+      const tile = cameraWallEl.querySelector(`[data-camera-stream="${cameraId}"]`);
+      if (!(node instanceof HTMLCanvasElement) || !(tile instanceof HTMLImageElement)) {
+        return;
+      }
+
+      const rect = tile.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      node.width = rect.width * dpr;
+      node.height = rect.height * dpr;
+      node.style.width = `${rect.width}px`;
+      node.style.height = `${rect.height}px`;
+      const overlayCtx = node.getContext("2d");
+      if (!overlayCtx) {
+        return;
+      }
+      overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      overlayCtx.clearRect(0, 0, rect.width, rect.height);
+
+      const cameraStatus = cameraStatuses.find((item) => item.id === cameraId);
+      const faces = cameraStatus?.lastFaces || [];
+      if (!faces.length || !tile.naturalWidth || !tile.naturalHeight) {
+        return;
+      }
+
+      const scale = Math.min(rect.width / tile.naturalWidth, rect.height / tile.naturalHeight);
+      const drawnW = tile.naturalWidth * scale;
+      const drawnH = tile.naturalHeight * scale;
+      const offsetX = (rect.width - drawnW) / 2;
+      const offsetY = (rect.height - drawnH) / 2;
+
+      overlayCtx.lineWidth = 3;
+      overlayCtx.font = "bold 14px Inter, sans-serif";
+
+      faces.forEach((face) => {
+        const known = Boolean(face.match && face.match.label);
+        const x = offsetX + face.box.x * scale;
+        const y = offsetY + face.box.y * scale;
+        const w = face.box.width * scale;
+        const h = face.box.height * scale;
+
+        overlayCtx.strokeStyle = known ? "#22c55e" : "#f87171";
+        overlayCtx.strokeRect(x, y, w, h);
+        const label = known ? `Known: ${face.match.label}` : "Unknown";
+        const labelText = `${label} · ${Math.round((face.match?.confidence ?? face.confidence) * 100)}%`;
+        const labelWidth = overlayCtx.measureText(labelText).width + 14;
+        overlayCtx.fillStyle = known ? "#166534" : "#7f1d1d";
+        overlayCtx.fillRect(x, Math.max(4, y - 22), labelWidth, 20);
+        overlayCtx.fillStyle = "#fff";
+        overlayCtx.fillText(labelText, x + 7, Math.max(18, y - 8));
       });
     });
   }
@@ -383,16 +501,19 @@
     renderState();
     renderFacesList();
     drawServerDetections();
+    renderCameraWall();
   }
 
   async function loadCameras() {
-    if (!cameraListEl || !cameraSelectEl) {
+    if (!cameraSelectEl) {
       return;
     }
     const response = await fetch(`${API_BASE}/cameras`, { cache: "no-store" });
     const payload = await response.json();
     cameras = payload.cameras || [];
     renderCameras();
+    renderCameraWall();
+    refreshMainStream();
   }
 
   async function loadSyncStatus() {
@@ -442,6 +563,14 @@
       });
       await Promise.all([fetchStatus(), loadSyncStatus()]);
     });
+  }
+
+  if (isLivePage && cameraSelectEl) {
+    cameraSelectEl.addEventListener("change", refreshMainStream);
+  }
+
+  if (isLivePage && cameraRoleEl) {
+    cameraRoleEl.addEventListener("change", refreshMainStream);
   }
 
   if (isLivePage && stopBtn) {

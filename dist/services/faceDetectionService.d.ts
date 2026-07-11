@@ -9,9 +9,11 @@ export declare class FaceDetectionService {
     private detector?;
     private readonly registry;
     private readonly attendance;
+    private readonly cameraClient?;
     private readonly pythonRecognizer?;
     private readonly updater;
     private activeCamera?;
+    private readonly cameraSessions;
     private attendanceSnapshot;
     private latestFrame?;
     private latestDetectionFrame?;
@@ -27,9 +29,6 @@ export declare class FaceDetectionService {
     private detectionStride;
     private frameModulo;
     private registeredFacesCount;
-    private pythonBusy;
-    private pythonDroppedFrames;
-    private pythonProcessedFrames;
     constructor(config?: AppEnv);
     getStatus(): {
         state: ServiceState;
@@ -72,6 +71,20 @@ export declare class FaceDetectionService {
             last_appearance: string;
             appearances: number;
             max_confidence: number;
+        }[];
+        cameras: {
+            id: string;
+            name: string;
+            role: "general" | "check_in" | "check_out";
+            stream: {
+                running: boolean;
+                lastState: string | undefined;
+            };
+            busy: boolean;
+            processedFrames: number;
+            droppedFrames: number;
+            lastFaces: DetectedFace[];
+            lastDetection: DetectionSnapshot | undefined;
         }[];
         update: {
             enabled: boolean;
@@ -179,8 +192,11 @@ export declare class FaceDetectionService {
     private handleDetectorResult;
     private handlePythonFrame;
     private waitForPythonRecognizerReady;
+    private startCameraSessions;
+    private stopCameraSessions;
     private annotateFaces;
     private resolveCamera;
+    private resolveCameras;
 }
 export declare const faceDetectionService: FaceDetectionService;
 export {};

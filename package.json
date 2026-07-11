@@ -13,7 +13,9 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "db:clear": "python3 scripts/db_admin.py",
+    "db:wipe": "python3 scripts/db_admin.py --all --yes"
   },
   "dependencies": {
     "@tensorflow-models/blazeface": "^0.1.0",

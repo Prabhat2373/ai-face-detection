@@ -126,6 +126,24 @@ The Python service uses InsightFace to do the actual face detection and embeddin
 When `RECOGNITION_BACKEND=python`, Node sends sampled camera frames to the Python service, which returns face boxes, identities, and snapshots.
 Camera definitions are managed through the Python service's `/cameras` endpoints and are stored in the SQLite database, so new cameras can be added, disabled, or updated without redeploying the app.
 
+### Database reset utility
+
+You can clear the whole SQLite database or specific tables with the helper script:
+
+```bash
+python3 scripts/db_admin.py --all
+python3 scripts/db_admin.py --table cameras
+python3 scripts/db_admin.py --tables cameras,attendance_records
+python3 scripts/db_admin.py --drop-file
+```
+
+From npm:
+
+```bash
+npm run db:clear -- --table cameras
+npm run db:wipe
+```
+
 ## Packaging
 
 See [packaging/README.md](/Users/prabhattambe/Documents/face_detection/packaging/README.md) for the Windows and macOS service scaffolding.

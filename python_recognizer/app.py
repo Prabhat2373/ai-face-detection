@@ -6,6 +6,10 @@ import csv
 import json
 import math
 import os
+import platform
+import shutil
+import subprocess
+import logging
 import sqlite3
 import threading
 import time
@@ -24,6 +28,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from insightface.app import FaceAnalysis
+
+
+logger = logging.getLogger("python_recognizer")
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
 
 
 def utc_now() -> datetime:
@@ -501,9 +510,11 @@ class FaceEngine:
         self.model_dir = os.getenv("INSIGHTFACE_MODEL_DIR") or str(
             Path.home() / ".cache" / "insightface"
         )
-        default_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
+        default_alarm = Path(__file__).resolve().with_name("alarm.wav")
+        downloads_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
         configured_alarm = os.getenv("ALARM_SOUND_PATH")
-        self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else default_alarm
+        self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else (default_alarm if default_alarm.exists() else downloads_alarm)
+        self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 10_000)
         self.sync_enabled = os.getenv("SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
@@ -514,6 +525,7 @@ class FaceEngine:
         self._model = self._load_model()
         self._sync_thread: threading.Thread | None = None
         self._sync_stop = threading.Event()
+        self._last_alarm_at = 0.0
         if self.sync_enabled and self.sync_endpoint_url:
             self._sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
             self._sync_thread.start()
@@ -532,6 +544,7 @@ class FaceEngine:
             "faces": len(self.store.list_faces()),
             "cameras": len(self.store.list_cameras()),
             "alarmSoundAvailable": self.alarm_sound_path.exists(),
+            "alarmCooldownMs": self.alarm_cooldown_ms,
             "timestamp": iso_now(),
         }
 
@@ -549,6 +562,16 @@ class FaceEngine:
         state = "faces detected" if detected else "no face detected"
         if snapshot is not None:
             state = "snapshot saved"
+        unknown_faces = [face for face in detected if not face["match"] or not face["match"].get("label")]
+        if unknown_faces:
+            self._trigger_alarm(
+                image,
+                camera_role,
+                camera_id,
+                "unknown_person",
+                unknown_faces,
+                snapshot,
+            )
         for face in detected:
             if face["match"] and face["match"].get("label"):
                 self.store.record_attendance(
@@ -735,6 +758,70 @@ class FaceEngine:
             "timestamp": iso_now(),
             "confidence": float(best_face["confidence"]),
         }
+
+    def _trigger_alarm(
+        self,
+        image: np.ndarray,
+        camera_role: str,
+        camera_id: str | None,
+        reason: str,
+        faces: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None,
+    ) -> None:
+        now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
+        with self._snapshot_lock:
+            if now_ms - self._last_alarm_at < self.alarm_cooldown_ms:
+                return
+            self._last_alarm_at = now_ms
+
+        alarm_record = {
+            "reason": reason,
+            "cameraRole": camera_role,
+            "cameraId": camera_id,
+            "timestamp": iso_now(),
+            "faces": faces,
+            "snapshot": snapshot,
+        }
+        self.store.enqueue_sync_event("alarm.triggered", alarm_record)
+        logger.warning(alarm_record, "Alarm triggered")
+        self._play_alarm_sound()
+
+    def _play_alarm_sound(self) -> None:
+        sound = self.alarm_sound_path
+        if not sound.exists():
+            logger.warning("Alarm sound file not found: %s", sound)
+            return
+
+        try:
+            if platform.system() == "Windows":
+                import winsound
+
+                winsound.PlaySound(str(sound), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                return
+
+            if shutil.which("afplay"):
+                subprocess.Popen(["afplay", str(sound)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+
+            if shutil.which("paplay"):
+                subprocess.Popen(["paplay", str(sound)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+
+            if shutil.which("ffplay"):
+                subprocess.Popen(
+                    ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(sound)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+
+            if shutil.which("aplay"):
+                subprocess.Popen(["aplay", str(sound)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+
+            logger.warning("No system audio player found for alarm playback")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to play alarm sound: %s", exc)
 
     def _sync_loop(self) -> None:
         while not self._sync_stop.is_set():
