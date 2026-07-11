@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from insightface.app import FaceAnalysis
 
@@ -500,6 +501,9 @@ class FaceEngine:
         self.model_dir = os.getenv("INSIGHTFACE_MODEL_DIR") or str(
             Path.home() / ".cache" / "insightface"
         )
+        default_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
+        configured_alarm = os.getenv("ALARM_SOUND_PATH")
+        self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else default_alarm
         self.sync_enabled = os.getenv("SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
@@ -527,8 +531,14 @@ class FaceEngine:
             "model": self.model_name,
             "faces": len(self.store.list_faces()),
             "cameras": len(self.store.list_cameras()),
+            "alarmSoundAvailable": self.alarm_sound_path.exists(),
             "timestamp": iso_now(),
         }
+
+    def alarm_sound(self) -> Path | None:
+        if self.alarm_sound_path.exists():
+            return self.alarm_sound_path
+        return None
 
     def recognize(self, image: np.ndarray, camera_role: str = "general", camera_id: str | None = None) -> dict[str, Any]:
         with self._model_lock:
@@ -802,6 +812,14 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return engine.health()
+
+
+@app.get("/alarm.wav")
+async def alarm_sound() -> Response:
+    sound_path = engine.alarm_sound()
+    if sound_path is None:
+        raise HTTPException(status_code=404, detail="Alarm sound not configured")
+    return FileResponse(sound_path, media_type="audio/wav", filename=sound_path.name)
 
 
 @app.get("/cameras")

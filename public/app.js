@@ -44,6 +44,8 @@
   let cameras = [];
   let syncState = null;
   let latestAttendance = [];
+  let lastAlarmAt = 0;
+  let alarmAudio = null;
 
   if (stream) {
     stream.crossOrigin = "anonymous";
@@ -90,6 +92,9 @@
       : faces.length
         ? "Unknown"
         : "-";
+    if (isLivePage && faces.length && !known) {
+      void triggerUnknownAlarm();
+    }
     rawEl.textContent = JSON.stringify(latestStatus, null, 2);
   }
 
@@ -262,6 +267,75 @@
     return String(role).replaceAll("_", " ");
   }
 
+  async function triggerUnknownAlarm() {
+    const now = Date.now();
+    if (now - lastAlarmAt < 5000) {
+      return;
+    }
+    lastAlarmAt = now;
+
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification("Unknown person detected", {
+          body: "An unrecognized face is visible on the live camera.",
+        });
+      } catch {
+        // ignore notification failures
+      }
+    }
+
+    if (!alarmAudio) {
+      alarmAudio = new Audio("/alarm.wav");
+      alarmAudio.preload = "auto";
+    }
+
+    try {
+      alarmAudio.currentTime = 0;
+      await alarmAudio.play();
+      return;
+    } catch {
+      // fall through to synthesized beep if the sound file is unavailable
+    }
+
+    const AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) {
+      return;
+    }
+
+    try {
+      const ctx = new AudioCtor();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.001;
+      gain.connect(ctx.destination);
+
+      const oscillator = ctx.createOscillator();
+      oscillator.type = "sine";
+      oscillator.frequency.value = 880;
+      oscillator.connect(gain);
+      oscillator.start();
+
+      const current = ctx.currentTime;
+      gain.gain.cancelScheduledValues(current);
+      gain.gain.setValueAtTime(0.001, current);
+      gain.gain.exponentialRampToValueAtTime(0.15, current + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, current + 0.65);
+
+      window.setTimeout(() => {
+        try {
+          oscillator.stop();
+        } catch {
+          // ignore stop race
+        }
+      }, 700);
+    } catch {
+      // ignore audio setup failures
+    }
+  }
+
   function renderAttendance() {
     if (!attendanceListEl) {
       return;
@@ -280,7 +354,7 @@
             <div class="row">
               <div>
                 <div><strong>${row.label}</strong></div>
-                <div class="small">Appearances: ${row.appearances}</div>
+                <div style="font-size: 16px">Appearances: ${row.appearances}</div>
               </div>
               <div class="pill">${Math.round((row.max_confidence || 0) * 100)}%</div>
             </div>
