@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+.npm-cache
+snapshots
+npm-debug.log*
+*.tsbuildinfo
