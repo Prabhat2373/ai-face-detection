@@ -1,0 +1,13 @@
+{
+  "payload": {
+    "tenantId": "atmosviatechnologies",
+    "companyName": "Atmosvia",
+    "plan": "pro",
+    "cloudSyncEnabled": true,
+    "issuedAt": "2026-07-14T06:44:06+00:00",
+    "expiresAt": "2027-07-14T00:00:00Z",
+    "machineId": "123456"
+  },
+  "signature": "2gEGVXeinxn68Zw3-FdjZKGd23iE3ahuXwQqBrOdgr0",
+  "algorithm": "HS256"
+}

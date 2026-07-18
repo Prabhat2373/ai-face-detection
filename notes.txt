@@ -6,3 +6,6 @@
 { uri: 'rtsp://192.168.0.9:554/ch01_fourth.264?dev=1' }
 { uri: 'rtsp://192.168.0.9:554/ch01_third.264?dev=1' }
 { uri: 'rtsp://192.168.0.9:554/ch01_third.264?dev=1' }
+
+
+if unknown detected in multiple faces then not alarming

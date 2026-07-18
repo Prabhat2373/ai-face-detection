@@ -1,8 +1,26 @@
 import { Router } from "express";
 import { z } from "zod";
+import { env } from "../config/env.js";
 import { faceDetectionService } from "../services/faceDetectionService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 export const cameraRoutes = Router();
+async function reloadDetectionIfNeeded() {
+    if (!env.AUTO_START_DETECTION) {
+        return;
+    }
+    try {
+        await faceDetectionService.stop();
+    }
+    catch {
+        // ignore stop failures during camera refresh
+    }
+    try {
+        await faceDetectionService.start();
+    }
+    catch {
+        // leave the service in its current state if restart fails
+    }
+}
 const cameraSchema = z.object({
     id: z.string().trim().min(1).optional(),
     name: z.string().trim().min(1).max(120),
@@ -35,6 +53,7 @@ cameraRoutes.post("/cameras", asyncHandler(async (req, res) => {
         return;
     }
     const camera = await faceDetectionService.addCamera(parsed.data);
+    void reloadDetectionIfNeeded();
     res.status(201).json({ ok: true, camera });
 }));
 cameraRoutes.put("/cameras/:cameraId", asyncHandler(async (req, res) => {
@@ -47,10 +66,12 @@ cameraRoutes.put("/cameras/:cameraId", asyncHandler(async (req, res) => {
         return;
     }
     const camera = await faceDetectionService.updateCamera(String(req.params.cameraId ?? ""), parsed.data);
+    void reloadDetectionIfNeeded();
     res.json({ ok: true, camera });
 }));
 cameraRoutes.delete("/cameras/:cameraId", asyncHandler(async (req, res) => {
     const removed = await faceDetectionService.deleteCamera(String(req.params.cameraId ?? ""));
+    void reloadDetectionIfNeeded();
     res.json({ ok: true, removed });
 }));
 //# sourceMappingURL=cameraRoutes.js.map

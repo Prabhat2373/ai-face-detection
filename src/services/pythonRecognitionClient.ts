@@ -81,7 +81,10 @@ type PythonCamerasResponse = {
 };
 
 export class PythonRecognitionClient {
-  public constructor(private readonly baseUrl: string) {}
+  public constructor(
+    private readonly baseUrl: string,
+    private readonly tenantId?: string,
+  ) {}
 
   public async health(): Promise<boolean> {
     try {
@@ -206,7 +209,9 @@ export class PythonRecognitionClient {
   }
 
   private async get<T>(path: string): Promise<T> {
-    const response = await fetch(new URL(path, this.baseUrl));
+    const response = await fetch(new URL(path, this.baseUrl), {
+      headers: this.tenantHeaders(),
+    });
     if (!response.ok) {
       throw await this.toError(response);
     }
@@ -218,6 +223,7 @@ export class PythonRecognitionClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...this.tenantHeaders(),
       },
       body: JSON.stringify(body),
     });
@@ -232,6 +238,7 @@ export class PythonRecognitionClient {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...this.tenantHeaders(),
       },
       body: JSON.stringify(body),
     });
@@ -250,5 +257,9 @@ export class PythonRecognitionClient {
       // Keep the HTTP status message if the recognizer returned non-JSON.
     }
     return new Error(message);
+  }
+
+  private tenantHeaders(): Record<string, string> {
+    return this.tenantId ? { "X-Tenant-Id": this.tenantId } : {};
   }
 }

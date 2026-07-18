@@ -10,8 +10,10 @@ import { cameraRoutes } from "./routes/cameraRoutes.js";
 import { detectionRoutes } from "./routes/detectionRoutes.js";
 import { updateRoutes } from "./routes/updateRoutes.js";
 import { healthRoutes } from "./routes/healthRoutes.js";
+import { licenseRoutes } from "./routes/licenseRoutes.js";
 import { faceDetectionService } from "./services/faceDetectionService.js";
 import { logger } from "./utils/logger.js";
+import { inspectLicense } from "./utils/license.js";
 
 const app = express();
 
@@ -48,6 +50,7 @@ app.use(
   }),
 );
 app.use(healthRoutes);
+app.use(licenseRoutes);
 app.use(cameraRoutes);
 app.use(updateRoutes);
 app.use(faceRoutes);
@@ -58,6 +61,11 @@ app.get("/favicon.ico", (_req, res) => {
 });
 
 app.get("/", async (_req, res, next) => {
+  const license = await inspectLicense();
+  if (!license.valid && env.ALLOW_UNLICENSED_SETUP) {
+    res.redirect("/setup");
+    return;
+  }
   res.redirect("/live");
 });
 
@@ -78,6 +86,10 @@ app.get("/admin", async (_req, res, next) => {
   await sendHtml("admin.html", res, next);
 });
 
+app.get("/setup", async (_req, res, next) => {
+  await sendHtml("setup.html", res, next);
+});
+
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   const normalized = error instanceof Error ? error : new Error(String(error));
   logger.error({ err: normalized }, "Unhandled request error");
@@ -89,9 +101,27 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
 app.use(errorHandler);
 
+const licenseStatus = await inspectLicense();
+if (!licenseStatus.valid && !env.ALLOW_UNLICENSED_SETUP) {
+  logger.error({ licenseStatus }, "License check failed at startup");
+  process.exit(1);
+}
+logger.info({ licenseStatus }, "License check completed at startup");
+
 const server = app.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "Face detection API listening");
 });
+
+if (env.AUTO_START_DETECTION) {
+  void (async () => {
+    try {
+      await faceDetectionService.start();
+      logger.info("Detection auto-started");
+    } catch (error) {
+      logger.warn({ err: error }, "Auto-start detection failed");
+    }
+  })();
+}
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   logger.info({ signal }, "Graceful shutdown started");

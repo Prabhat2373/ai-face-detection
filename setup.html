@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>First-run Setup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08111f;
+        --panel: #101a2c;
+        --panel-2: #16233d;
+        --text: #edf3ff;
+        --muted: #9badc8;
+        --line: rgba(155, 173, 200, 0.18);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Inter, system-ui, sans-serif; background: linear-gradient(180deg, #08111f, #0d1728); color: var(--text); }
+      .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+      .panel { background: rgba(16, 26, 44, 0.96); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      input, button, select, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 12px 14px;
+        border-radius: 8px;
+        font: inherit;
+      }
+      button { cursor: pointer; font-weight: 700; }
+      .primary { background: linear-gradient(135deg, #0f766e, #2563eb); border-color: transparent; }
+      .stack { display: grid; gap: 12px; }
+      .small { color: var(--muted); font-size: 13px; }
+      pre { white-space: pre-wrap; word-break: break-word; margin: 0; color: #cbd5e1; }
+      @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="panel stack">
+        <div>
+          <h1 style="margin:0 0 8px;">First-run Setup</h1>
+          <div class="small">Activate the license, create the company tenant, and make the local agent ready.</div>
+        </div>
+        <div class="grid">
+          <input id="companyName" placeholder="Company name" />
+          <input id="tenantId" placeholder="Tenant ID" />
+          <input id="adminEmail" placeholder="Admin email" />
+          <input id="adminPassword" placeholder="Admin password" type="password" />
+        </div>
+        <div class="grid">
+          <input id="licenseFile" type="file" accept="application/json,.json" />
+          <input id="licenseSecret" placeholder="License secret for activation" />
+        </div>
+        <label class="small"><input id="cloudSync" type="checkbox" /> Enable cloud sync</label>
+        <div class="grid">
+          <input id="plan" value="local" placeholder="Plan" />
+          <input id="machineId" placeholder="Machine ID (optional)" />
+        </div>
+        <div class="grid">
+          <input id="expiresAt" placeholder="Expires at (optional ISO time)" />
+          <button id="loadExample" type="button">Load sample JSON</button>
+        </div>
+        <textarea id="licenseJson" rows="10" placeholder="Paste license JSON here"></textarea>
+        <div class="grid">
+          <button id="activateBtn" class="primary" type="button">Activate and create tenant</button>
+          <a href="/live" style="display:grid;align-items:center;text-align:center;text-decoration:none;border:1px solid var(--line);background:var(--panel-2);color:var(--text);padding:12px 14px;border-radius:8px;">Go to live view</a>
+        </div>
+        <pre id="output"></pre>
+      </div>
+    </main>
+    <script src="/setup.js" defer></script>
+  </body>
+</html>

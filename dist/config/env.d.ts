@@ -7,6 +7,11 @@ export declare const env: {
     RECOGNITION_BACKEND: "node" | "python";
     PYTHON_RECOGNIZER_URL: string;
     PYTHON_DB_PATH: string;
+    DEFAULT_TENANT_ID: string;
+    LICENSE_FILE: string;
+    LICENSE_SECRET: string;
+    ALLOW_UNLICENSED_SETUP: boolean;
+    AUTO_START_DETECTION: boolean;
     AGENT_VERSION: string;
     AUTO_UPDATE_INTERVAL_MS: number;
     LOG_LEVEL: string;

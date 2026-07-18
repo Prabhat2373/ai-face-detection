@@ -1,7 +1,9 @@
 export class PythonRecognitionClient {
     baseUrl;
-    constructor(baseUrl) {
+    tenantId;
+    constructor(baseUrl, tenantId) {
         this.baseUrl = baseUrl;
+        this.tenantId = tenantId;
     }
     async health() {
         try {
@@ -99,7 +101,9 @@ export class PythonRecognitionClient {
         return await response.text();
     }
     async get(path) {
-        const response = await fetch(new URL(path, this.baseUrl));
+        const response = await fetch(new URL(path, this.baseUrl), {
+            headers: this.tenantHeaders(),
+        });
         if (!response.ok) {
             throw await this.toError(response);
         }
@@ -110,6 +114,7 @@ export class PythonRecognitionClient {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                ...this.tenantHeaders(),
             },
             body: JSON.stringify(body),
         });
@@ -123,6 +128,7 @@ export class PythonRecognitionClient {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",
+                ...this.tenantHeaders(),
             },
             body: JSON.stringify(body),
         });
@@ -141,6 +147,9 @@ export class PythonRecognitionClient {
             // Keep the HTTP status message if the recognizer returned non-JSON.
         }
         return new Error(message);
+    }
+    tenantHeaders() {
+        return this.tenantId ? { "X-Tenant-Id": this.tenantId } : {};
     }
 }
 //# sourceMappingURL=pythonRecognitionClient.js.map

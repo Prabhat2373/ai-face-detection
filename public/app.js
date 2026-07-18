@@ -18,9 +18,6 @@
   const rawEl = el("raw");
   const startBtn = el("startBtn");
   const stopBtn = el("stopBtn");
-  const registerBtn = el("registerBtn");
-  const clearBtn = el("clearBtn");
-  const personNameEl = el("personName");
   const recognitionTextEl = el("recognitionText");
   const recognitionDotEl = el("recognitionDot");
   const knownCountEl = el("knownCount");
@@ -40,34 +37,198 @@
   const updateStatusEl = el("updateStatus");
   const downloadCsvBtn = el("downloadCsvBtn");
   const refreshAttendanceBtn = el("refreshAttendanceBtn");
+  const departmentFormEl = el("departmentForm");
+  const departmentListEl = el("departmentList");
+  const employeeFormEl = el("employeeForm");
+  const employeeListEl = el("employeeList");
+  const cameraDepartmentSelectEl = el("cameraDepartmentSelect");
+  const employeeDepartmentSelectEl = el("employeeDepartmentSelect");
+  const cleanupFacesBtn = el("cleanupFacesBtn");
 
   let latestStatus = null;
   let cameras = [];
   let syncState = null;
   let latestAttendance = [];
+  let departments = [];
+  let employees = [];
   let lastAlarmAt = 0;
   let alarmAudio = null;
+  let streamLoadTimer = null;
+  let pollInFlight = false;
+  let statusTimer = null;
+  let syncTimer = null;
+  let adminTimer = null;
+  let currentMainStreamUrl = "";
+  let cameraWallSignature = "";
+  let frameTimer = null;
+  let liveSocket = null;
+  let liveSocketReconnectTimer = null;
+  const latestFrameUrls = new Map();
 
   function buildStreamUrl(params = {}) {
-    const url = new URL("/stream.mjpg", API_BASE);
+    const url = new URL("/frame.jpg", API_BASE);
     if (params.cameraId) {
       url.searchParams.set("cameraId", params.cameraId);
     }
     if (params.cameraRole) {
       url.searchParams.set("cameraRole", params.cameraRole);
     }
+    url.searchParams.set("_", String(Date.now()));
     return url.toString();
+  }
+
+  function wsUrl(path) {
+    const url = new URL(path, API_BASE);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+  }
+
+  function buildStreamKey(params = {}) {
+    const key = new URL("/frame.jpg", API_BASE);
+    if (params.cameraId) {
+      key.searchParams.set("cameraId", params.cameraId);
+    }
+    if (params.cameraRole) {
+      key.searchParams.set("cameraRole", params.cameraRole);
+    }
+    return key.toString();
   }
 
   function refreshMainStream() {
     if (!stream) {
       return;
     }
+    if (streamLoadTimer) {
+      window.clearTimeout(streamLoadTimer);
+    }
+    stream.onload = () => {
+      if (stateEl && latestStatus?.state === "running") {
+        stateEl.textContent = "running";
+        stateEl.className = "pill running";
+      }
+    };
+    stream.onerror = () => {
+      if (stateEl) {
+        stateEl.textContent = "error";
+        stateEl.className = "pill error";
+      }
+    };
     stream.crossOrigin = "anonymous";
-    stream.src = buildStreamUrl({
+    const params = {
       cameraId: activeCameraId() || undefined,
       cameraRole: activeCameraId() ? undefined : activeCameraRole() || undefined,
+    };
+    const nextKey = buildStreamKey(params);
+    if (nextKey === currentMainStreamUrl && stream.src) {
+      return;
+    }
+    currentMainStreamUrl = nextKey;
+    const activeId = activeCameraId();
+    if (activeId && latestFrameUrls.has(activeId)) {
+      stream.src = latestFrameUrls.get(activeId);
+    } else if (!activeId) {
+      const firstCamera = cameras.find((camera) => !activeCameraRole() || camera.camera_role === activeCameraRole());
+      const cached = firstCamera ? latestFrameUrls.get(firstCamera.id) : null;
+      if (cached) {
+        stream.src = cached;
+      }
+    }
+    streamLoadTimer = window.setTimeout(() => {
+      if (!stream.naturalWidth || !stream.naturalHeight) {
+        if (stateEl) {
+          stateEl.textContent = "connecting";
+          stateEl.className = "pill idle";
+        }
+      }
+    }, 8000);
+  }
+
+  function refreshFrameImages() {
+    if (!isLivePage) {
+      return;
+    }
+    if (stream && currentMainStreamUrl) {
+      const params = {
+        cameraId: activeCameraId() || undefined,
+        cameraRole: activeCameraId() ? undefined : activeCameraRole() || undefined,
+      };
+      stream.src = buildStreamUrl(params);
+    }
+    cameraWallEl?.querySelectorAll("[data-camera-stream]").forEach((node) => {
+      if (!(node instanceof HTMLImageElement)) {
+        return;
+      }
+      const cameraId = node.getAttribute("data-camera-stream");
+      if (!cameraId) {
+        return;
+      }
+      node.src = buildStreamUrl({ cameraId });
     });
+  }
+
+  function applyFrame(cameraId, jpegBase64) {
+    const src = `data:image/jpeg;base64,${jpegBase64}`;
+    latestFrameUrls.set(cameraId, src);
+    const activeId = activeCameraId();
+    const activeRole = activeCameraRole();
+    const camera = cameras.find((item) => item.id === cameraId);
+    const shouldShowMain =
+      !activeId
+        ? !activeRole || activeRole === camera?.camera_role
+        : activeId === cameraId;
+    if (stream && shouldShowMain) {
+      stream.src = src;
+    }
+    const tile = cameraWallEl?.querySelector(`[data-camera-stream="${cameraId}"]`);
+    if (tile instanceof HTMLImageElement) {
+      tile.src = src;
+    }
+  }
+
+  function connectLiveSocket() {
+    if (!isLivePage || liveSocket?.readyState === WebSocket.OPEN || liveSocket?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+    liveSocket = new WebSocket(wsUrl("/ws/live"));
+    liveSocket.onopen = () => {
+      if (stateEl && latestStatus?.state === "running") {
+        stateEl.textContent = "running";
+        stateEl.className = "pill running";
+      }
+    };
+    liveSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.status) {
+          latestStatus = payload.status;
+          renderState();
+          renderFacesList();
+          drawServerDetections();
+          updateCameraWallStatus();
+        }
+        (payload.frames || []).forEach((frame) => {
+          if (frame.cameraId && frame.jpegBase64) {
+            applyFrame(frame.cameraId, frame.jpegBase64);
+          }
+        });
+      } catch {
+        // ignore malformed socket payloads
+      }
+    };
+    liveSocket.onclose = () => {
+      liveSocket = null;
+      if (liveSocketReconnectTimer) {
+        window.clearTimeout(liveSocketReconnectTimer);
+      }
+      liveSocketReconnectTimer = window.setTimeout(connectLiveSocket, 1500);
+    };
+    liveSocket.onerror = () => {
+      try {
+        liveSocket?.close();
+      } catch {
+        // ignore close races
+      }
+    };
   }
 
   if (stream) {
@@ -193,6 +354,16 @@
     if (!cameraSelectEl) {
       return;
     }
+    if (cameraDepartmentSelectEl) {
+      cameraDepartmentSelectEl.innerHTML = `<option value="">No department</option>${departments
+        .map((department) => `<option value="${department.id}">${department.name}</option>`)
+        .join("")}`;
+    }
+    if (employeeDepartmentSelectEl) {
+      employeeDepartmentSelectEl.innerHTML = departments
+        .map((department) => `<option value="${department.id}">${department.name}</option>`)
+        .join("");
+    }
 
     const options = cameras
       .map(
@@ -214,6 +385,7 @@
                 <div>
                   <div><strong>${camera.name}</strong></div>
                   <div class="small">Role: ${camera.camera_role || "general"}</div>
+                  <div class="small">Department: ${departmentName(camera.department_id)}</div>
                   <div class="small">${camera.rtsp_url}</div>
                   <div class="small">${camera.enabled ? "Enabled" : "Disabled"}</div>
                 </div>
@@ -237,6 +409,8 @@
         cameraFormEl.elements.namedItem("name").value = camera.name;
         cameraFormEl.elements.namedItem("cameraRole").value =
           camera.camera_role || "general";
+        cameraFormEl.elements.namedItem("departmentId").value =
+          camera.department_id || "";
         cameraFormEl.elements.namedItem("rtspUrl").value = camera.rtsp_url;
         cameraFormEl.elements.namedItem("rtspUsername").value =
           camera.rtsp_username || "";
@@ -267,12 +441,18 @@
       return;
     }
 
-    const cameraStatuses = Array.isArray(latestStatus?.cameras) ? latestStatus.cameras : [];
     const enabled = cameras.filter((camera) => camera.enabled);
+    const nextSignature = enabled.map((camera) => `${camera.id}:${camera.name}:${camera.camera_role || "general"}`).join("|");
     if (!enabled.length) {
+      cameraWallSignature = "";
       cameraWallEl.innerHTML = '<div class="small">No enabled cameras available.</div>';
       return;
     }
+    if (nextSignature === cameraWallSignature) {
+      updateCameraWallStatus();
+      return;
+    }
+    cameraWallSignature = nextSignature;
 
     cameraWallEl.innerHTML = enabled
       .map(
@@ -286,17 +466,30 @@
               <div class="small">${camera.id}</div>
             </div>
             <div class="camera-stage">
-              <img data-camera-stream="${camera.id}" src="${buildStreamUrl({ cameraId: camera.id })}" alt="${camera.name} stream" loading="lazy" />
+              <img data-camera-stream="${camera.id}" alt="${camera.name} stream" loading="lazy" />
               <canvas data-camera-overlay="${camera.id}"></canvas>
             </div>
-            <div class="small">${cameraStatuses.find((item) => item.id === camera.id)?.stream?.running ? "Running" : "Connecting"}</div>
+            <div class="small" data-camera-status="${camera.id}">Connecting</div>
           </div>
         `,
       )
       .join("");
+    updateCameraWallStatus();
+  }
+
+  function updateCameraWallStatus() {
+    if (!cameraWallEl) {
+      return;
+    }
+    const cameraStatuses = Array.isArray(latestStatus?.cameras) ? latestStatus.cameras : [];
 
     cameraWallEl.querySelectorAll("[data-camera-overlay]").forEach((node) => {
       const cameraId = node.getAttribute("data-camera-overlay");
+      const label = cameraWallEl.querySelector(`[data-camera-status="${cameraId}"]`);
+      const cameraStatus = cameraStatuses.find((item) => item.id === cameraId);
+      if (label) {
+        label.textContent = cameraStatus?.stream?.running ? "Running" : "Connecting";
+      }
       const tile = cameraWallEl.querySelector(`[data-camera-stream="${cameraId}"]`);
       if (!(node instanceof HTMLCanvasElement) || !(tile instanceof HTMLImageElement)) {
         return;
@@ -315,7 +508,6 @@
       overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       overlayCtx.clearRect(0, 0, rect.width, rect.height);
 
-      const cameraStatus = cameraStatuses.find((item) => item.id === cameraId);
       const faces = cameraStatus?.lastFaces || [];
       if (!faces.length || !tile.naturalWidth || !tile.naturalHeight) {
         return;
@@ -383,6 +575,106 @@
       return "general";
     }
     return String(role).replaceAll("_", " ");
+  }
+
+  function formatPercent(value) {
+    return `${Math.round((Number(value) || 0) * 100)}%`;
+  }
+
+  function snapshotUrl(path) {
+    if (!path) {
+      return "";
+    }
+    const normalized = String(path).replaceAll("\\", "/");
+    const marker = "/snapshots/";
+    const filename = normalized.includes(marker)
+      ? normalized.slice(normalized.indexOf(marker) + marker.length)
+      : normalized.replace(/^\.?\/?snapshots\//, "");
+    return `${API_BASE}/snapshots/${encodeURIComponent(filename)}`;
+  }
+
+  function departmentName(id) {
+    if (!id) {
+      return "-";
+    }
+    return departments.find((department) => department.id === id)?.name || id;
+  }
+
+  function renderDepartments() {
+    if (!departmentListEl) return;
+    departmentListEl.innerHTML = departments.length
+      ? departments.map((department) => `
+          <div class="face">
+            <div class="row">
+              <div>
+                <strong>${department.name}</strong>
+                <div class="small">${department.description || ""}</div>
+              </div>
+              <div class="actions-inline">
+                <button data-department-edit="${department.id}">Edit</button>
+                <button data-department-delete="${department.id}">Delete</button>
+              </div>
+            </div>
+          </div>
+        `).join("")
+      : '<div class="small">No departments yet.</div>';
+    departmentListEl.querySelectorAll("[data-department-edit]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const department = departments.find((item) => item.id === button.getAttribute("data-department-edit"));
+        if (!department || !departmentFormEl) return;
+        departmentFormEl.elements.namedItem("id").value = department.id;
+        departmentFormEl.elements.namedItem("name").value = department.name;
+        departmentFormEl.elements.namedItem("description").value = department.description || "";
+      });
+    });
+    departmentListEl.querySelectorAll("[data-department-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        await postJson(`${API_BASE}/departments/${encodeURIComponent(button.getAttribute("data-department-delete"))}`, null, "DELETE");
+        await loadDepartments();
+      });
+    });
+  }
+
+  function renderEmployees() {
+    if (!employeeListEl) return;
+    employeeListEl.innerHTML = employees.length
+      ? employees.map((employee) => `
+          <div class="face">
+            <div class="row">
+              <div>
+                <strong>${employee.name}</strong>
+                <div class="small">${employee.employee_code || ""} ${employee.role || ""}</div>
+                <div class="small">Access: ${(employee.departments || []).map(departmentName).join(", ") || "-"}</div>
+                <div class="small">Photos: ${employee.photoCount || 0} · ${employee.active ? "Active" : "Inactive"}</div>
+              </div>
+              <div class="actions-inline">
+                <button data-employee-edit="${employee.id}">Edit</button>
+                <button data-employee-delete="${employee.id}">Delete</button>
+              </div>
+            </div>
+          </div>
+        `).join("")
+      : '<div class="small">No employees yet.</div>';
+    employeeListEl.querySelectorAll("[data-employee-edit]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const employee = employees.find((item) => item.id === button.getAttribute("data-employee-edit"));
+        if (!employee || !employeeFormEl) return;
+        employeeFormEl.elements.namedItem("id").value = employee.id;
+        employeeFormEl.elements.namedItem("name").value = employee.name;
+        employeeFormEl.elements.namedItem("employeeCode").value = employee.employee_code || "";
+        employeeFormEl.elements.namedItem("role").value = employee.role || "";
+        employeeFormEl.elements.namedItem("active").checked = Boolean(employee.active);
+        Array.from(employeeDepartmentSelectEl?.options || []).forEach((option) => {
+          option.selected = (employee.departments || []).includes(option.value);
+        });
+      });
+    });
+    employeeListEl.querySelectorAll("[data-employee-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        await postJson(`${API_BASE}/employees/${encodeURIComponent(button.getAttribute("data-employee-delete"))}`, null, "DELETE");
+        await loadEmployees();
+      });
+    });
   }
 
   async function triggerUnknownAlarm() {
@@ -467,60 +759,98 @@
 
     attendanceListEl.innerHTML = latestAttendance
       .map(
-        (row) => `
+        (row) => {
+          const firstSnapshot = snapshotUrl(row.first_snapshot_path);
+          const lastSnapshot = snapshotUrl(row.last_snapshot_path);
+          return `
           <div class="attendance-row">
             <div class="row">
               <div>
                 <div><strong>${row.label}</strong></div>
                 <div style="font-size: 16px">Appearances: ${row.appearances}</div>
               </div>
-              <div class="pill">${Math.round((row.max_confidence || 0) * 100)}%</div>
+              <div class="pill">${formatPercent(row.max_confidence)}</div>
             </div>
-            <div style="font-size: 16px" class="small">Check in role: ${formatRole(row.first_camera_role)}</div>
-            <div style="font-size: 16px" class="small">Check out role: ${formatRole(row.last_camera_role)}</div>
-            <div style="font-size: 16px" class="small">First appearance: ${formatDateTime(row.first_appearance)}</div>
-            <div style="font-size: 16px" class="small">Last appearance: ${formatDateTime(row.last_appearance)}</div>
-            <div style="font-size: 16px" class="small">Raw first: ${row.first_appearance}</div>
+            <div class="columns-2">
+              <div>
+                <div style="font-size: 16px" class="small">First appearance: ${formatDateTime(row.first_appearance)}</div>
+                <div style="font-size: 16px" class="small">Check in role: ${formatRole(row.first_camera_role)}</div>
+                <div style="font-size: 16px" class="small">Camera: ${row.first_camera_name || row.first_camera_id || "-"}</div>
+                <div style="font-size: 16px" class="small">Department: ${row.first_department_name || row.first_department_id || "-"}</div>
+                <div class="small">Snapshot: ${firstSnapshot ? `<a href="${firstSnapshot}" target="_blank" rel="noreferrer">Open</a>` : "-"}</div>
+              </div>
+              <div>
+                <div style="font-size: 16px" class="small">Last appearance: ${formatDateTime(row.last_appearance)}</div>
+                <div style="font-size: 16px" class="small">Check out role: ${formatRole(row.last_camera_role)}</div>
+                <div style="font-size: 16px" class="small">Camera: ${row.last_camera_name || row.last_camera_id || "-"}</div>
+                <div style="font-size: 16px" class="small">Department: ${row.last_department_name || row.last_department_id || "-"}</div>
+                <div class="small">Snapshot: ${lastSnapshot ? `<a href="${lastSnapshot}" target="_blank" rel="noreferrer">Open</a>` : "-"}</div>
+              </div>
+            </div>
+            <div style="font-size: 16px" class="small">Last confidence: ${formatPercent(row.last_confidence)} · Max confidence: ${formatPercent(row.max_confidence)}</div>
+            <div class="small">Raw first: ${row.first_appearance}</div>
             <div class="small">Raw last: ${row.last_appearance}</div>
           </div>
-        `,
+        `;
+        },
       )
       .join("");
   }
 
   async function fetchStatus() {
-    const response = await fetch(`${API_BASE}/status`, { cache: "no-store" });
-    latestStatus = await response.json();
+    latestStatus = await fetchJson(`${API_BASE}/status`);
     const faces = latestStatus?.lastFaces || [];
     const known = faces.find((face) => face?.match?.label);
-    recognitionTextEl.textContent = known
-      ? `Known: ${known.match.label}`
-      : "Unknown";
-    recognitionDotEl.className = `match-dot ${known ? "known" : ""}`;
-    knownCountEl.textContent = `${latestStatus?.registeredFaces || 0} registered face${(latestStatus?.registeredFaces || 0) === 1 ? "" : "s"}`;
+    if (recognitionTextEl) {
+      recognitionTextEl.textContent = known
+        ? `Known: ${known.match.label}`
+        : "Unknown";
+    }
+    if (recognitionDotEl) {
+      recognitionDotEl.className = `match-dot ${known ? "known" : ""}`;
+    }
+    if (knownCountEl) {
+      knownCountEl.textContent = `${latestStatus?.registeredFaces || 0} registered face${(latestStatus?.registeredFaces || 0) === 1 ? "" : "s"}`;
+    }
     renderState();
     renderFacesList();
     drawServerDetections();
-    renderCameraWall();
+    updateCameraWallStatus();
   }
 
   async function loadCameras() {
     if (!cameraSelectEl) {
       return;
     }
-    const response = await fetch(`${API_BASE}/cameras`, { cache: "no-store" });
-    const payload = await response.json();
+    const payload = await fetchJson(`${API_BASE}/cameras`);
     cameras = payload.cameras || [];
     renderCameras();
     renderCameraWall();
     refreshMainStream();
   }
 
+  async function loadDepartments() {
+    if (!departmentListEl && !cameraDepartmentSelectEl && !employeeDepartmentSelectEl) {
+      return;
+    }
+    const payload = await fetchJson(`${API_BASE}/departments`);
+    departments = payload.departments || [];
+    renderDepartments();
+    renderCameras();
+    renderEmployees();
+  }
+
+  async function loadEmployees() {
+    if (!employeeListEl) {
+      return;
+    }
+    const payload = await fetchJson(`${API_BASE}/employees`);
+    employees = payload.employees || [];
+    renderEmployees();
+  }
+
   async function loadSyncStatus() {
-    const response = await fetch(`${API_BASE}/sync/status`, {
-      cache: "no-store",
-    });
-    syncState = await response.json();
+    syncState = await fetchJson(`${API_BASE}/sync/status`);
     renderSync();
   }
 
@@ -528,10 +858,7 @@
     if (!attendanceListEl) {
       return;
     }
-    const response = await fetch(`${API_BASE}/attendance`, {
-      cache: "no-store",
-    });
-    const payload = await response.json();
+    const payload = await fetchJson(`${API_BASE}/attendance`);
     latestAttendance = payload.attendance || [];
     renderAttendance();
   }
@@ -555,6 +882,40 @@
     return response.json().catch(() => ({}));
   }
 
+  async function fetchJson(url, options = {}) {
+    const response = await fetch(url, {
+      cache: "no-store",
+      ...options,
+    });
+    if (!response.ok) {
+      throw new Error(`Request failed: ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  async function fileToDataUrl(file) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error(`Unable to read ${file.name}`));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function autoStartIfNeeded() {
+    if (!isLivePage) {
+      return;
+    }
+    try {
+      await postJson(`${API_BASE}/start`, {
+        cameraId: activeCameraId(),
+        cameraRole: activeCameraRole(),
+      });
+    } catch {
+      // best-effort startup only
+    }
+  }
+
   if (isLivePage && startBtn) {
     startBtn.addEventListener("click", async () => {
       await postJson(`${API_BASE}/start`, {
@@ -576,34 +937,6 @@
   if (isLivePage && stopBtn) {
     stopBtn.addEventListener("click", async () => {
       await postJson(`${API_BASE}/stop`);
-      await fetchStatus();
-    });
-  }
-
-  if (isLivePage && registerBtn) {
-    registerBtn.addEventListener("click", async () => {
-      const label = personNameEl.value.trim();
-      if (!label) {
-        alert("Enter a name first.");
-        return;
-      }
-
-      try {
-        registerBtn.disabled = true;
-        await postJson(`${API_BASE}/faces/register`, { label });
-        personNameEl.value = "";
-        await fetchStatus();
-      } catch (error) {
-        alert(error.message || "Registration failed");
-      } finally {
-        registerBtn.disabled = false;
-      }
-    });
-  }
-
-  if (isLivePage && clearBtn) {
-    clearBtn.addEventListener("click", async () => {
-      await postJson(`${API_BASE}/faces/clear`);
       await fetchStatus();
     });
   }
@@ -649,6 +982,7 @@
         name: String(formData.get("name") || "").trim(),
         cameraRole:
           String(formData.get("cameraRole") || "general").trim() || "general",
+        departmentId: String(formData.get("departmentId") || "").trim() || null,
         rtspUrl: String(formData.get("rtspUrl") || "").trim(),
         rtspUsername: String(formData.get("rtspUsername") || "").trim() || null,
         rtspPassword: String(formData.get("rtspPassword") || "").trim() || null,
@@ -675,30 +1009,152 @@
     });
   }
 
+  if (isAdminPage && departmentFormEl) {
+    departmentFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(departmentFormEl);
+      const payload = {
+        id: String(formData.get("id") || "").trim() || undefined,
+        name: String(formData.get("name") || "").trim(),
+        description: String(formData.get("description") || "").trim() || null,
+      };
+
+      if (!payload.name) {
+        alert("Department name is required.");
+        return;
+      }
+
+      if (payload.id) {
+        await postJson(
+          `${API_BASE}/departments/${encodeURIComponent(payload.id)}`,
+          payload,
+          "PUT",
+        );
+      } else {
+        await postJson(`${API_BASE}/departments`, payload);
+      }
+      departmentFormEl.reset();
+      await Promise.all([loadDepartments(), loadCameras()]);
+    });
+  }
+
+  if (isAdminPage && employeeFormEl) {
+    employeeFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(employeeFormEl);
+      const selectedDepartments = Array.from(employeeDepartmentSelectEl?.selectedOptions || [])
+        .map((option) => option.value)
+        .filter(Boolean);
+      const payload = {
+        id: String(formData.get("id") || "").trim() || undefined,
+        name: String(formData.get("name") || "").trim(),
+        employeeCode: String(formData.get("employeeCode") || "").trim() || null,
+        role: String(formData.get("role") || "").trim() || null,
+        active: formData.get("active") === "on",
+        departmentIds: selectedDepartments,
+      };
+
+      if (!payload.name) {
+        alert("Employee name is required.");
+        return;
+      }
+
+      let result;
+      if (payload.id) {
+        result = await postJson(
+          `${API_BASE}/employees/${encodeURIComponent(payload.id)}`,
+          payload,
+          "PUT",
+        );
+      } else {
+        result = await postJson(`${API_BASE}/employees`, payload);
+      }
+
+      const employeeId = result.employee?.id || payload.id;
+      const files = Array.from(employeeFormEl.elements.namedItem("photos")?.files || []);
+      if (employeeId && files.length) {
+        const photos = await Promise.all(files.map(fileToDataUrl));
+        await postJson(`${API_BASE}/employees/${encodeURIComponent(employeeId)}/photos`, {
+          photos,
+        });
+      }
+
+      employeeFormEl.reset();
+      Array.from(employeeDepartmentSelectEl?.options || []).forEach((option) => {
+        option.selected = false;
+      });
+      await loadEmployees();
+    });
+  }
+
+  if (isAdminPage && cleanupFacesBtn) {
+    cleanupFacesBtn.addEventListener("click", async () => {
+      await postJson(`${API_BASE}/employees/cleanup-orphan-faces`);
+      await loadEmployees();
+      alert("Old non-employee face samples removed.");
+    });
+  }
+
   if (isLivePage && stream) {
     stream.addEventListener("load", drawServerDetections);
   }
   if (isLivePage) {
     window.addEventListener("resize", drawServerDetections);
+    window.addEventListener("beforeunload", () => {
+      if (stream) {
+        stream.removeAttribute("src");
+      }
+      cameraWallEl?.querySelectorAll("[data-camera-stream]").forEach((node) => {
+        if (node instanceof HTMLImageElement) {
+          node.removeAttribute("src");
+        }
+      });
+      try {
+        liveSocket?.close();
+      } catch {
+        // ignore unload close failures
+      }
+    });
   }
 
-  setInterval(async () => {
-    const tasks = [loadSyncStatus()];
-    if (isLivePage) {
-      tasks.unshift(fetchStatus(), loadCameras());
+  async function poll() {
+    if (pollInFlight) {
+      return;
     }
-    if (isAdminPage) {
-      tasks.push(loadAttendance());
+    pollInFlight = true;
+    try {
+      const tasks = [];
+      if (isLivePage) {
+        tasks.push(fetchStatus());
+      }
+      if (isAdminPage) {
+        tasks.push(loadSyncStatus(), loadAttendance());
+      }
+      await Promise.allSettled(tasks);
+    } finally {
+      pollInFlight = false;
     }
-    await Promise.allSettled(tasks);
-  }, 2000);
+  }
 
   const bootTasks = [loadSyncStatus()];
   if (isLivePage) {
-    bootTasks.push(fetchStatus(), loadCameras());
+    bootTasks.push(fetchStatus(), loadDepartments(), loadCameras(), autoStartIfNeeded());
   }
   if (isAdminPage) {
-    bootTasks.push(loadAttendance(), loadCameras());
+    bootTasks.push(loadAttendance(), loadDepartments(), loadEmployees(), loadCameras());
   }
-  void Promise.allSettled(bootTasks);
+  void Promise.allSettled(bootTasks).then(() => {
+    if (isLivePage) {
+      refreshMainStream();
+      connectLiveSocket();
+    }
+    poll();
+    if (isLivePage) {
+      statusTimer = window.setInterval(fetchStatus, 15000);
+    }
+    if (isAdminPage) {
+      syncTimer = window.setInterval(loadSyncStatus, 15000);
+      adminTimer = window.setInterval(loadAttendance, 10000);
+    }
+  });
 })();

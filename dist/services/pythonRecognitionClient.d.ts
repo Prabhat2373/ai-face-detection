@@ -60,7 +60,8 @@ type PythonCamera = {
 };
 export declare class PythonRecognitionClient {
     private readonly baseUrl;
-    constructor(baseUrl: string);
+    private readonly tenantId?;
+    constructor(baseUrl: string, tenantId?: string | undefined);
     health(): Promise<boolean>;
     recognize(frame: Buffer, cameraRole?: "general" | "check_in" | "check_out", cameraId?: string | null): Promise<DetectedFace[]>;
     recognizeWithMeta(frame: Buffer, cameraRole?: "general" | "check_in" | "check_out", cameraId?: string | null): Promise<PythonRecognizeResponse>;
@@ -94,5 +95,6 @@ export declare class PythonRecognitionClient {
     private post;
     private put;
     private toError;
+    private tenantHeaders;
 }
 export {};

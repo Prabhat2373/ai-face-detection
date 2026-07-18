@@ -81,6 +81,9 @@
                 <option value="check_out">Check out</option>
               </select>
             </div>
+            <select name="departmentId" id="cameraDepartmentSelect" aria-label="Camera department">
+              <option value="">No department</option>
+            </select>
             <div class="columns-2">
               <input name="rtspUrl" placeholder="RTSP URL" />
               <input name="rtspUsername" placeholder="RTSP username" />
@@ -100,6 +103,37 @@
             <select id="cameraSelect" aria-label="Select camera"></select>
           </div>
           <div class="camera-grid" id="cameraList"></div>
+          <div class="panel stack" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Departments</div>
+            <form id="departmentForm" class="columns-2">
+              <input type="hidden" name="id" />
+              <input name="name" placeholder="Department name" />
+              <input name="description" placeholder="Description" />
+              <button type="submit" class="primary">Save department</button>
+            </form>
+            <div class="faces" id="departmentList"></div>
+          </div>
+          <div class="panel stack" style="background: rgba(255,255,255,0.02);">
+            <div class="label">Employees</div>
+            <form id="employeeForm" class="stack">
+              <input type="hidden" name="id" />
+              <div class="columns-2">
+                <input name="name" placeholder="Employee name" />
+                <input name="employeeCode" placeholder="Employee code" />
+              </div>
+              <div class="columns-2">
+                <input name="role" placeholder="Role" />
+                <label class="small"><input type="checkbox" name="active" checked /> Active</label>
+              </div>
+              <select name="departmentIds" id="employeeDepartmentSelect" multiple aria-label="Allowed departments"></select>
+              <input name="photos" type="file" accept="image/*" multiple />
+              <div class="actions">
+                <button type="submit" class="primary">Save employee</button>
+                <button type="button" id="cleanupFacesBtn">Clean old faces</button>
+              </div>
+            </form>
+            <div class="faces" id="employeeList"></div>
+          </div>
           <div class="panel" style="background: rgba(255,255,255,0.02);">
             <div class="label">Sync Queue</div>
             <pre id="syncQueue"></pre>

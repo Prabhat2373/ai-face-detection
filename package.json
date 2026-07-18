@@ -15,7 +15,10 @@
     "lint": "eslint .",
     "clean": "rm -rf dist",
     "db:clear": "python3 scripts/db_admin.py",
-    "db:wipe": "python3 scripts/db_admin.py --all --yes"
+    "db:wipe": "python3 scripts/db_admin.py --all --yes",
+    "license:generate": "python3 scripts/generate_license.py",
+    "install:local:linux": "bash scripts/install_local.sh",
+    "install:local:windows": "powershell -ExecutionPolicy Bypass -File scripts/install_local.ps1"
   },
   "dependencies": {
     "@tensorflow-models/blazeface": "^0.1.0",
