@@ -90,7 +90,9 @@ QPushButton[class="nav-btn"]:hover {{
     background: {surface_2};
 }}
 
-/* Active nav button: only change border-left-color, don't change layout width */
+/* Active nav button: show a left accent without shifting layout.
+   The transparent left border is reserved by the base rule, so changing
+   the border-left-color here provides the accent without moving content. */
 QPushButton[class="nav-btn"]:checked,
 QPushButton[class="nav-btn active"] {{
     background: {selection};

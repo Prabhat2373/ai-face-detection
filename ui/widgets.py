@@ -1,4 +1,16 @@
-"""Reusable custom widgets for the FaceAgent desktop app."""
+# -*- coding: utf-8 -*-
+"""Reusable custom widgets for the FaceAgent desktop app.
+
+This module provides a few lightweight widgets used across the UI. The
+important change here is `NavButton`: it always sets a QIcon (even a
+transparent placeholder) so the text layout remains stable when the
+button becomes active. This prevents the label from shifting when the
+active left-border is applied by the stylesheet.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QFrame,
@@ -10,7 +22,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QFont, QColor
 
 
 class StatCard(QFrame):
@@ -95,15 +107,18 @@ class SectionHeader(QWidget):
 class NavButton(QPushButton):
     """A sidebar navigation button that supports SVG icons and emoji fallback.
 
-    Constructor:
-      NavButton(text, icon_char="", icon_path="", parent=None)
-
-    - If `icon_path` is provided it will be loaded as a QIcon (preferred, SVG).
-    - Otherwise, if `icon_char` is provided or a keyword matches, an emoji is used.
+    Behavior:
+      - If `icon_path` is provided and loads successfully as a QIcon, that icon
+        is used.
+      - Otherwise an emoji (explicit or derived from label) is rendered into
+        a small pixmap and used as the icon.
+      - If both fail, a transparent placeholder pixmap is used so the button
+        reserves the icon area and the text will not shift when the button
+        becomes active.
     """
 
-    DEFAULT_ICONS = {
-        "live": "🎥",
+    DEFAULT_EMOJI = {
+        "live": "📡",
         "dashboard": "📊",
         "employees": "👥",
         "departments": "🏢",
@@ -115,7 +130,7 @@ class NavButton(QPushButton):
         "sync": "🔁",
     }
 
-    def __init__(self, text: str, icon_char: str = "", icon_path: str = "", parent=None):
+    def __init__(self, text: str, icon_char: str = "", icon_path: Optional[str] = None, parent=None):
         super().__init__(parent)
         self.setProperty("class", "nav-btn")
         self.setCheckable(True)
@@ -124,33 +139,62 @@ class NavButton(QPushButton):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setToolTip(text)
 
-        # Prefer explicit SVG/icon path if provided
+        icon_size = QSize(18, 18)
+        icon_set = False
+
+        # 1) Try explicit SVG/path icon
         if icon_path:
             try:
                 qicon = QIcon(icon_path)
                 if not qicon.isNull():
                     self.setIcon(qicon)
-                    # keep icon size small and aligned with text
-                    self.setIconSize(QSize(18, 18))
+                    self.setIconSize(icon_size)
+                    icon_set = True
             except Exception:
-                # fallback to text-only if icon fails to load
-                pass
+                icon_set = False
 
-        # If no icon path supplied, use emoji fallback or provided icon_char
-        if self.icon().isNull():
-            icon = (icon_char or "").strip()
-            if not icon:
+        # 2) If no SVG, try emoji fallback (explicit icon_char or derived)
+        if not icon_set:
+            emoji = (icon_char or "").strip()
+            if not emoji:
                 lower = (text or "").lower()
-                for key, emoji in self.DEFAULT_ICONS.items():
+                for key, em in self.DEFAULT_EMOJI.items():
                     if key in lower:
-                        icon = emoji
+                        emoji = em
                         break
-            display = f"  {icon}  {text}" if icon else text
-            self.setText(display)
-        else:
-            # If we have a graphic icon, use compact text without extra emoji spacing.
-            self.setText(f"  {text}")
 
+            if emoji:
+                # Render emoji into pixmap to use as a QIcon so the button icon slot is occupied.
+                try:
+                    size = icon_size.width()
+                    pix = QPixmap(size, size)
+                    pix.fill(Qt.transparent)
+                    painter = QPainter(pix)
+                    try:
+                        font = QFont()
+                        font.setPointSize(12)
+                        painter.setFont(font)
+                        painter.setPen(QColor(0, 0, 0))
+                        painter.drawText(pix.rect(), Qt.AlignCenter, emoji)
+                    finally:
+                        painter.end()
+                    self.setIcon(QIcon(pix))
+                    self.setIconSize(icon_size)
+                    icon_set = True
+                except Exception:
+                    icon_set = False
+
+        # 3) If neither SVG nor emoji available, set a transparent placeholder pixmap
+        if not icon_set:
+            size = icon_size.width()
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.transparent)
+            self.setIcon(QIcon(placeholder))
+            self.setIconSize(icon_size)
+
+        # Set text without extra emoji spacing — icon is always in the icon slot now.
+        # Leading spaces are avoided to keep alignment consistent with stylesheet.
+        self.setText(text)
 
 
 class Pill(QFrame):
