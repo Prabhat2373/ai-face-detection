@@ -44,9 +44,16 @@ class DashboardPage(QWidget):
         desc.setProperty("class", "page-desc")
         header_layout.addWidget(title)
         header_layout.addWidget(desc)
-        self._main_layout.addWidget(header)
 
-        # Stats row
+        # KPI / header container so popup widgets (combo, calendar) are anchored
+        # to a concrete QWidget parent. This prevents floating popup mis-positioning.
+        header_container = QWidget()
+        header_container_layout = QVBoxLayout(header_container)
+        header_container_layout.setContentsMargins(0, 0, 0, 0)
+        header_container_layout.setSpacing(8)
+        header_container_layout.addWidget(header)
+
+        # Stats row (kept as a layout; we'll embed it inside a widget for stable anchoring)
         self._stats_layout = QHBoxLayout()
         self._stats_layout.setSpacing(12)
         self._stat_cameras = StatCard("Active Cameras", "0")
@@ -58,7 +65,14 @@ class DashboardPage(QWidget):
         for card in [self._stat_cameras, self._stat_employees, self._stat_departments,
                      self._stat_faces, self._stat_attendance]:
             self._stats_layout.addWidget(card)
-        self._main_layout.addLayout(self._stats_layout)
+
+        # Place the stats layout inside a widget so popups anchor relative to this widget.
+        kpi_widget = QWidget()
+        kpi_widget.setLayout(self._stats_layout)
+        header_container_layout.addWidget(kpi_widget)
+
+        # Add the combined header + KPI container to the main layout
+        self._main_layout.addWidget(header_container)
 
         # Recent attendance
         self._main_layout.addWidget(SectionHeader("Recent Attendance", "Latest check-ins and check-outs"))

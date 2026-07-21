@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon
 
 
 class StatCard(QFrame):
@@ -92,16 +93,64 @@ class SectionHeader(QWidget):
 
 
 class NavButton(QPushButton):
-    """A sidebar navigation button."""
+    """A sidebar navigation button that supports SVG icons and emoji fallback.
 
-    def __init__(self, text: str, icon_char: str = "", parent=None):
+    Constructor:
+      NavButton(text, icon_char="", icon_path="", parent=None)
+
+    - If `icon_path` is provided it will be loaded as a QIcon (preferred, SVG).
+    - Otherwise, if `icon_char` is provided or a keyword matches, an emoji is used.
+    """
+
+    DEFAULT_ICONS = {
+        "live": "🎥",
+        "dashboard": "📊",
+        "employees": "👥",
+        "departments": "🏢",
+        "cameras": "📷",
+        "attendance": "🗓️",
+        "alarms": "🔔",
+        "settings": "⚙️",
+        "access": "🛂",
+        "sync": "🔁",
+    }
+
+    def __init__(self, text: str, icon_char: str = "", icon_path: str = "", parent=None):
         super().__init__(parent)
-        self.setText(f"  {icon_char}  {text}" if icon_char else text)
         self.setProperty("class", "nav-btn")
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(38)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip(text)
+
+        # Prefer explicit SVG/icon path if provided
+        if icon_path:
+            try:
+                qicon = QIcon(icon_path)
+                if not qicon.isNull():
+                    self.setIcon(qicon)
+                    # keep icon size small and aligned with text
+                    self.setIconSize(QSize(18, 18))
+            except Exception:
+                # fallback to text-only if icon fails to load
+                pass
+
+        # If no icon path supplied, use emoji fallback or provided icon_char
+        if self.icon().isNull():
+            icon = (icon_char or "").strip()
+            if not icon:
+                lower = (text or "").lower()
+                for key, emoji in self.DEFAULT_ICONS.items():
+                    if key in lower:
+                        icon = emoji
+                        break
+            display = f"  {icon}  {text}" if icon else text
+            self.setText(display)
+        else:
+            # If we have a graphic icon, use compact text without extra emoji spacing.
+            self.setText(f"  {text}")
+
 
 
 class Pill(QFrame):

@@ -1,7 +1,6 @@
-"""Application-wide light and dark styles for the FaceAgent desktop app."""
-
-from __future__ import annotations
-
+# Application-wide light-only stylesheet for the FaceAgent desktop app.
+# This file intentionally forces the light palette and avoids f-string brace
+# interpolation issues by using str.format with doubled CSS braces for literals.
 
 LIGHT = {
     "bg": "#f4f6fb",
@@ -24,122 +23,110 @@ LIGHT = {
     "input_hover": "#d5dce8",
 }
 
-DARK = {
-    "bg": "#0b1220",
-    "surface": "#111827",
-    "surface_2": "#162033",
-    "sidebar": "#0f172a",
-    "line": "#263244",
-    "text": "#e5edf8",
-    "muted": "#9aa6b7",
-    "soft": "#172554",
-    "primary": "#3b82f6",
-    "primary_hover": "#60a5fa",
-    "danger": "#ef4444",
-    "success": "#22c55e",
-    "warning": "#f59e0b",
-    "table_head": "#182235",
-    "selection": "#1e3a5f",
-    "disabled_bg": "#1f2937",
-    "disabled_text": "#64748b",
-    "input_hover": "#3a465a",
-}
-
-
-def build_stylesheet(mode: str = "light") -> str:
-    colors = DARK if mode == "dark" else LIGHT
-    return f"""
+# Note: the CSS uses double braces '{{' and '}}' for literal braces because
+# .format() is used to substitute color tokens like {text}, {bg}, etc.
+_STYLESHEET_TEMPLATE = """
 QWidget {{
     font-family: "Helvetica Neue", "Segoe UI", "Inter", sans-serif;
-    color: {colors["text"]};
+    color: {text};
     background-color: transparent;
     font-size: 14px;
 }}
 
 QMainWindow, QDialog, QWidget#centralWidget, QWidget#contentShell {{
-    background: {colors["bg"]};
+    background: {bg};
 }}
 
 QWidget#sidebar {{
-    background: {colors["sidebar"]};
-    border-right: 1px solid {colors["line"]};
+    background: {sidebar};
+    border-right: 1px solid {line};
     min-width: 220px;
     max-width: 220px;
 }}
 
 QWidget#topBar {{
-    background: {colors["surface"]};
-    border-bottom: 1px solid {colors["line"]};
+    background: {surface};
+    border-bottom: 1px solid {line};
+}}
+
+/* Hide the theme toggle button (we force light theme) */
+QWidget#topBar QPushButton {{
+    visibility: hidden;
 }}
 
 QLabel#sidebarTitle {{
-    color: {colors["text"]};
+    color: {text};
     font-size: 18px;
     font-weight: 800;
 }}
 
 QLabel#sidebarSubtitle, QLabel[class="muted"], QLabel[class="page-desc"] {{
-    color: {colors["muted"]};
+    color: {muted};
 }}
 
 QLabel[class="nav-section"] {{
-    color: {colors["muted"]};
+    color: {muted};
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
 }}
 
+/* Sidebar nav button: reserve left border so activation doesn't shift content */
 QPushButton[class="nav-btn"] {{
     background: transparent;
     border: none;
     border-radius: 0;
-    color: {colors["text"]};
+    color: {text};
     font-size: 14px;
     font-weight: 600;
-    padding: 12px 18px;
+    padding: 12px 15px;
+    padding-left: 18px;
     text-align: left;
+    border-left: 3px solid transparent;
+    box-sizing: border-box;
 }}
 
 QPushButton[class="nav-btn"]:hover {{
-    background: {colors["surface_2"]};
+    background: {surface_2};
 }}
 
+/* Active nav button: only change border-left-color, don't change layout width */
 QPushButton[class="nav-btn"]:checked,
 QPushButton[class="nav-btn active"] {{
-    background: {colors["selection"]};
-    color: {colors["primary"]};
-    border-left: 3px solid {colors["primary"]};
+    background: {selection};
+    color: {primary};
+    border-left-color: {primary};
 }}
 
 QFrame[class="panel"], QFrame[class="stat-card"] {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["line"]};
+    background: {surface};
+    border: 1px solid {line};
     border-radius: 8px;
 }}
 
 QLabel[class="stat-label"] {{
-    color: {colors["muted"]};
+    color: {muted};
     font-size: 12px;
     font-weight: 700;
 }}
 
 QLabel[class="stat-value"] {{
-    color: {colors["text"]};
+    color: {text};
     font-size: 26px;
     font-weight: 800;
 }}
 
 QLabel[class="section-title"], QLabel[class="page-title"] {{
-    color: {colors["text"]};
+    color: {text};
     font-size: 22px;
     font-weight: 800;
 }}
 
 QPushButton {{
-    background: {colors["surface_2"]};
-    border: 1px solid {colors["line"]};
+    background: {surface_2};
+    border: 1px solid {line};
     border-radius: 7px;
-    color: {colors["text"]};
+    color: {text};
     font-size: 14px;
     font-weight: 700;
     padding: 9px 16px;
@@ -147,86 +134,86 @@ QPushButton {{
 }}
 
 QPushButton:hover {{
-    border-color: {colors["primary"]};
+    border-color: {primary};
 }}
 
 QPushButton:disabled {{
-    background: {colors["disabled_bg"]};
-    border-color: {colors["line"]};
-    color: {colors["disabled_text"]};
+    background: {disabled_bg};
+    border-color: {line};
+    color: {disabled_text};
 }}
 
 QPushButton[class="primary"] {{
-    background: {colors["primary"]};
-    border-color: {colors["primary"]};
+    background: {primary};
+    border-color: {primary};
     color: #ffffff;
 }}
 
 QPushButton[class="primary"]:hover {{
-    background: {colors["primary_hover"]};
+    background: {primary_hover};
 }}
 
 QPushButton[class="primary"]:disabled {{
-    background: {colors["disabled_bg"]};
-    border-color: {colors["line"]};
-    color: {colors["disabled_text"]};
+    background: {disabled_bg};
+    border-color: {line};
+    color: {disabled_text};
 }}
 
 QPushButton[class="danger"] {{
     background: rgba(220, 38, 38, 0.12);
-    color: {colors["danger"]};
+    color: {danger};
     border-color: rgba(220, 38, 38, 0.18);
 }}
 
 QPushButton[class="ghost"] {{
-    background: {colors["surface"]};
-    border-color: {colors["line"]};
-    color: {colors["text"]};
+    background: {surface};
+    border-color: {line};
+    color: {text};
 }}
 
 QPushButton[class="ghost"]:hover {{
-    background: {colors["surface_2"]};
-    color: {colors["primary"]};
+    background: {surface_2};
+    color: {primary};
 }}
 
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDateEdit {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["line"]};
+    background: {surface};
+    border: 1px solid {line};
     border-radius: 7px;
-    color: {colors["text"]};
+    color: {text};
     padding: 10px 13px;
-    selection-background-color: {colors["primary"]};
+    selection-background-color: {primary};
     selection-color: #ffffff;
     min-height: 22px;
 }}
 
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover, QComboBox:hover, QSpinBox:hover, QDateEdit:hover {{
-    border-color: {colors["input_hover"]};
+    border-color: {input_hover};
 }}
 
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus {{
-    border-color: {colors["primary"]};
+    border-color: {primary};
 }}
 
 QLineEdit::placeholder {{
-    color: {colors["muted"]};
+    color: {muted};
 }}
 
 QComboBox QAbstractItemView {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["line"]};
-    color: {colors["text"]};
-    selection-background-color: {colors["selection"]};
+    background: {surface};
+    border: 1px solid {line};
+    color: {text};
+    selection-background-color: {selection};
 }}
 
 QComboBox::drop-down, QDateEdit::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: top right;
     width: 28px;
-    border-left: 1px solid {colors["line"]};
+    border-left: 1px solid {line};
     border-top-right-radius: 7px;
     border-bottom-right-radius: 7px;
-    background: {colors["surface_2"]};
+    background: {surface_2};
 }}
 
 QComboBox::down-arrow, QDateEdit::down-arrow {{
@@ -236,77 +223,77 @@ QComboBox::down-arrow, QDateEdit::down-arrow {{
 }}
 
 QCalendarWidget, QCalendarWidget QWidget {{
-    background: {colors["surface"]};
-    color: {colors["text"]};
+    background: {surface};
+    color: {text};
 }}
 
 QCalendarWidget QToolButton {{
-    background: {colors["surface_2"]};
-    border: 1px solid {colors["line"]};
+    background: {surface_2};
+    border: 1px solid {line};
     border-radius: 6px;
-    color: {colors["text"]};
+    color: {text};
     padding: 6px 10px;
 }}
 
 QCalendarWidget QToolButton:hover {{
-    border-color: {colors["primary"]};
-    color: {colors["primary"]};
+    border-color: {primary};
+    color: {primary};
 }}
 
 QCalendarWidget QMenu {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["line"]};
-    color: {colors["text"]};
+    background: {surface};
+    border: 1px solid {line};
+    color: {text};
 }}
 
 QCalendarWidget QSpinBox {{
-    background: {colors["surface_2"]};
-    color: {colors["text"]};
-    border: 1px solid {colors["line"]};
+    background: {surface_2};
+    color: {text};
+    border: 1px solid {line};
     border-radius: 6px;
     padding: 4px 8px;
 }}
 
 QCalendarWidget QAbstractItemView {{
-    background: {colors["surface"]};
-    alternate-background-color: {colors["surface_2"]};
-    color: {colors["text"]};
-    selection-background-color: {colors["primary"]};
+    background: {surface};
+    alternate-background-color: {surface_2};
+    color: {text};
+    selection-background-color: {primary};
     selection-color: #ffffff;
     outline: none;
 }}
 
 QTableWidget, QTableView {{
-    background: {colors["surface"]};
-    border: 1px solid {colors["line"]};
+    background: {surface};
+    border: 1px solid {line};
     border-radius: 8px;
-    color: {colors["text"]};
-    gridline-color: {colors["line"]};
-    selection-background-color: {colors["selection"]};
-    selection-color: {colors["text"]};
-    alternate-background-color: {colors["surface_2"]};
+    color: {text};
+    gridline-color: {line};
+    selection-background-color: {selection};
+    selection-color: {text};
+    alternate-background-color: {surface_2};
     outline: none;
 }}
 
 QTableWidget::item, QTableView::item {{
     padding: 9px 12px;
-    border-bottom: 1px solid {colors["line"]};
+    border-bottom: 1px solid {line};
 }}
 
 QHeaderView::section {{
-    background: {colors["table_head"]};
-    color: {colors["muted"]};
+    background: {table_head};
+    color: {muted};
     font-size: 12px;
     font-weight: 800;
     padding: 11px 12px;
     border: none;
-    border-bottom: 1px solid {colors["line"]};
+    border-bottom: 1px solid {line};
 }}
 
 QTableCornerButton::section {{
-    background: {colors["table_head"]};
+    background: {table_head};
     border: none;
-    border-bottom: 1px solid {colors["line"]};
+    border-bottom: 1px solid {line};
 }}
 
 QScrollArea {{
@@ -319,19 +306,30 @@ QScrollBar:vertical {{
 }}
 
 QScrollBar::handle:vertical {{
-    background: {colors["line"]};
+    background: {line};
     border-radius: 4px;
     min-height: 28px;
 }}
 
 QToolTip {{
-    background: {colors["surface"]};
-    color: {colors["text"]};
-    border: 1px solid {colors["line"]};
+    background: {surface};
+    color: {text};
+    border: 1px solid {line};
     border-radius: 6px;
     padding: 6px 10px;
 }}
 """
 
+def build_stylesheet(mode: str = "light") -> str:
+    """
+    Return the application stylesheet.
 
+    The function intentionally ignores the 'mode' parameter and always returns
+    the light theme to avoid popup/rendering inconsistencies across platforms.
+    """
+    colors = LIGHT
+    return _STYLESHEET_TEMPLATE.format(**colors)
+
+
+# Precompute the stylesheet used by the UI modules.
 STYLESHEET = build_stylesheet("light")

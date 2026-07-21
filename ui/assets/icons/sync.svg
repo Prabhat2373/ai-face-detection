@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+     xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <title>Sync / Updates</title>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Circular sync arrows -->
+    <path d="M21 12.5a8.5 8.5 0 1 1-2.49-5.99" stroke-width="1.2" stroke-opacity="0.95"/>
+    <!-- Arrowheads -->
+    <path d="M21 12.5v-3.0h-3.0" stroke-width="1.2" stroke-opacity="0.95" transform="translate(-0.6,-0.4)"/>
+    <path d="M3 11.5v3h3" stroke-width="1.2" stroke-opacity="0.95" transform="translate(0.6,0.4)"/>
+
+    <!-- Small circular progress accent in center -->
+    <circle cx="12" cy="12" r="1.6" fill="currentColor" fill-opacity="0.12" stroke="none"/>
+
+    <!-- Subtle outer rounded outline for cohesion with other sidebar icons -->
+    <rect x="1.6" y="1.6" width="20.8" height="20.8" rx="3.2" ry="3.2"
+          stroke="currentColor" stroke-opacity="0.06" fill="none" stroke-width="1.2"/>
+  </g>
+</svg>
