@@ -5,3 +5,141 @@ dist
 snapshots
 npm-debug.log*
 *.tsbuildinfo
+
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.Python
+
+# Distribution / packaging
+build/
+dist/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+*.egg
+*.whl
+
+# PyInstaller / py2app / packaging outputs
+# Keep spec files in packaging/ (they are versioned), but ignore build outputs.
+dist/*.app
+dist/*.dmg
+dist/*.exe
+dist/*.msi
+# py2app build dir
+build/  # already covered above
+# pyinstaller created EXEs and bundles typically end up in dist/, covered above
+
+# Application-specific generated artifacts
+logs/
+*.log
+*.sqlite3
+*.db-journal
+
+# License tokens / private keys (do not commit keys)
+# Keep the public key tracked; ignore private keys and generated tokens.
+licenses/*.key
+licenses/vendor_private.pem
+licenses/*.pem
+!licenses/public_key.pem
+
+# User-specific license that might be copied into repo by mistake
+license.key
+
+# OS generated files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# Python tooling caches
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.cache/
+.mypy_cache/
+.pyre/
+pytestdebug.log
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log
+dist_frontend/
+build_frontend/
+
+# Packaging artifacts / installers
+*.msi
+*.exe
+*.dmg
+*.app
+*.pkg
+*.iso
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# Environment files
+.env
+.env.*.local
+.env.local
+.env.*.bak
+
+# CI / local config
+.vagrant/
+*.log.*
+coverage.xml
+coverage.*
+/.cache
+.Dockerfile.*
+docker-compose*.yml
+
+# Misc
+*.iml
+*.class
+*.ps1
+*.sh  # if you want to keep build scripts tracked, remove this
+
+# Ignore large caches that may appear from model downloads / caches
+.cache/
+*.cache/
+__models_cache__/
+insightface_models/.cache/
+.venv_cache/
+
+# Snapshots and temporary packaging staging
+snapshots/
+packaging/tmp/
+packaging/*.dmg
+packaging/*.zip
+
+# Logs produced during packaging
+packaging/logs/
