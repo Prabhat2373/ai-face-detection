@@ -937,7 +937,7 @@ class FaceEngine:
         embedding = self._embedding_for(face)
         assert embedding is not None
         raw_match = self._match_embedding(embedding, camera_department_id)
-        match = raw_match if raw_match and raw_match.get("authorized", True) else None
+        match = raw_match
         bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
         x1, y1, x2, y2 = bbox[:4]
         confidence = float(getattr(face, "det_score", 0.0))
@@ -987,7 +987,7 @@ class FaceEngine:
             department_ids = sorted({department_id for sample in samples for department_id in sample[2]})
             active = all(sample[3] for sample in samples)
             authorized = True
-            if employee_id and camera_department_id:
+            if employee_id and camera_department_id and department_ids:
                 authorized = camera_department_id in department_ids
             if not active:
                 authorized = False

@@ -10,15 +10,16 @@ This page shows:
  - Single attendance table with merged rows (employees + attendance) showing absentees
 """
 
+import os
 from datetime import date, datetime
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QLineEdit, QMessageBox, QDateEdit, QComboBox, QListView,
+    QScrollArea, QLineEdit, QMessageBox, QDateEdit, QComboBox, QListView, QDialog,
 )
-from PySide6.QtCore import QDate, QSize, Qt
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtCore import QDate, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QBrush, QPixmap
 
 from ..widgets import StatCard
 from ..database import Database
@@ -33,6 +34,14 @@ class AttendancePage(QWidget):
         self.db = Database.get()
         self._build_ui()
         self.refresh()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(3000)
+        self._refresh_timer.timeout.connect(self._auto_refresh)
+        self._refresh_timer.start()
+
+    def _auto_refresh(self):
+        if self.isVisible() and self.date_input.date() == QDate.currentDate():
+            self.refresh()
 
     def _build_ui(self):
         scroll = QScrollArea()
@@ -88,12 +97,27 @@ class AttendancePage(QWidget):
         f_layout.setContentsMargins(0, 0, 0, 0)
         f_layout.setSpacing(8)
 
+        # Date scope mode selector
+        self.date_scope = QComboBox()
+        self.date_scope.addItem("Single Date", "single")
+        self.date_scope.addItem("All Dates / Recent", "all")
+        self.date_scope.setMinimumWidth(150)
+        self.date_scope.currentIndexChanged.connect(self.refresh)
+        try:
+            self.date_scope.setView(QListView())
+            view = self.date_scope.view()
+            if view is not None:
+                view.setStyleSheet("background:#ffffff; color:#111827; selection-background-color:#e8f0fe; selection-color:#ffffff;")
+        except Exception:
+            pass
+        f_layout.addWidget(self.date_scope)
+
         # Date selector
         self.date_input = QDateEdit()
         self.date_input.setCalendarPopup(True)
         self.date_input.setDate(QDate.currentDate())
         self.date_input.setDisplayFormat("dd MMM yyyy")
-        self.date_input.setMinimumWidth(160)
+        self.date_input.setMinimumWidth(150)
         self.date_input.setButtonSymbols(QDateEdit.UpDownArrows)
         self.date_input.dateChanged.connect(self.refresh)
         f_layout.addWidget(self.date_input)
@@ -103,7 +127,6 @@ class AttendancePage(QWidget):
             cal = self.date_input.calendarWidget()
             if cal is not None:
                 cal.setAutoFillBackground(True)
-                # apply a concise light stylesheet for the calendar popup
                 cal.setStyleSheet(
                     "QCalendarWidget { background: #ffffff; color: #111827; selection-background-color: #e8f0fe; selection-color: #ffffff; }"
                     "QCalendarWidget QToolButton { background: #f8fafc; color: #111827; border: 1px solid #e5e7eb; }"
@@ -111,7 +134,6 @@ class AttendancePage(QWidget):
                     "QCalendarWidget QMenu { background: #ffffff; color: #111827; }"
                 )
         except Exception:
-            # calendar might not be available in very old PySide builds; ignore
             pass
 
         # Department filter (use a styled QListView for consistent popup visuals)
@@ -172,9 +194,9 @@ class AttendancePage(QWidget):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(8)
+        self._table.setColumnCount(9)
         self._table.setHorizontalHeaderLabels(
-            ["#", "Employee", "Department", "Check-In", "Check-Out", "Camera", "Status", "Conf"]
+            ["#", "Employee", "Department", "Check-In", "Check-Out", "Camera", "Snapshot", "Status", "Conf"]
         )
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # #
@@ -183,8 +205,9 @@ class AttendancePage(QWidget):
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Check-In
         header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Check-Out
         header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Camera
-        header_view.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Status
-        header_view.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Conf
+        header_view.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Snapshot
+        header_view.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Status
+        header_view.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Conf
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -210,25 +233,41 @@ class AttendancePage(QWidget):
         main_layout.addWidget(scroll)
 
     def refresh(self):
-        """Reload data (KPIs, filters, table) for the selected date."""
-        sel_date = self.date_input.date().toString("yyyy-MM-dd")
+        """Reload data (KPIs, filters, table) for the selected date or all dates."""
+        mode = self.date_scope.currentData() if hasattr(self, "date_scope") else "single"
+        if mode == "all":
+            self.date_input.setEnabled(False)
+            attendance_all = self.db.list_attendance(None)
+        else:
+            self.date_input.setEnabled(True)
+            sel_date = self.date_input.date().toString("yyyy-MM-dd")
+            attendance_all = self.db.list_attendance(sel_date)
+            if not attendance_all and not getattr(self, "_has_auto_landed_date", False):
+                all_recs = self.db.list_attendance(None)
+                if all_recs:
+                    latest_rec = max(
+                        all_recs,
+                        key=lambda r: str(r.get("last_appearance") or r.get("first_appearance") or "")
+                    )
+                    latest_ts = str(latest_rec.get("attendance_date") or latest_rec.get("last_appearance") or "")[:10]
+                    if latest_ts and len(latest_ts) == 10:
+                        self._has_auto_landed_date = True
+                        self.date_input.blockSignals(True)
+                        self.date_input.setDate(QDate.fromString(latest_ts, "yyyy-MM-dd"))
+                        self.date_input.blockSignals(False)
+                        attendance_all = self.db.list_attendance(latest_ts)
 
         employees = self.db.list_employees()
         cameras = self.db.list_cameras()
-        attendance_all = self.db.list_attendance(sel_date)
 
         # KPIs
         total_emps = len(employees)
         checked_today = len(attendance_all)
-        try:
-            alarms = len(self.db.list_sync_events(100))
-        except Exception:
-            alarms = 0
+        alarms = 0
         cameras_online = sum(1 for c in cameras if c.get("enabled"))
         total_cameras = len(cameras)
 
         self._stat_total.set_value(str(total_emps))
-        # show departments as unit
         try:
             self._stat_total.set_unit(f"{len(self.db.list_departments())} departments")
         except Exception:
@@ -250,22 +289,35 @@ class AttendancePage(QWidget):
         # build lookup of employees by name
         emp_by_label = {}
         for emp in employees:
-            name = emp.get("name") or ""
+            name = str(emp.get("name") or "").strip()
             emp_by_label[name] = emp
+            emp_by_label[name.lower()] = emp
+            if emp.get("id"):
+                emp_by_label[emp["id"]] = emp
 
         # merged rows: first include attendance records (present and unknowns)
         merged = []
         seen = set()
         for rec in attendance_all:
-            lbl = rec.get("label") or ""
-            seen.add(lbl)
-            emp = emp_by_label.get(lbl)
-            merged.append(self._build_row_from(rec, emp))
+            person_name = rec.get("person_label") or rec.get("label") or ""
+            if "::" in str(person_name):
+                parts = str(person_name).split("::")
+                if len(parts) >= 3:
+                    person_name = parts[1]
+                elif len(parts) == 2:
+                    person_name = parts[0]
+
+            person_name = str(person_name).strip()
+            seen.add(person_name.lower())
+            emp = emp_by_label.get(person_name) or emp_by_label.get(person_name.lower())
+            rec_copy = dict(rec)
+            rec_copy["label"] = person_name
+            merged.append(self._build_row_from(rec_copy, emp))
 
         # include absentees
         for emp in employees:
-            name = emp.get("name") or ""
-            if name in seen:
+            name = str(emp.get("name") or "").strip()
+            if name.lower() in seen:
                 continue
             absent_rec = {
                 "label": name,
@@ -294,15 +346,15 @@ class AttendancePage(QWidget):
         camera = rec.get("last_camera_name") or rec.get("first_camera_name") or rec.get("last_camera_id") or rec.get("first_camera_id") or "-"
         appearances = rec.get("appearances", 0)
         max_conf = rec.get("max_confidence")
+        snapshot_path = rec.get("last_snapshot_path") or rec.get("first_snapshot_path")
 
-        if first and last and first != last:
-            status = "Complete"
-        elif first and not last:
-            status = "Checked In"
-        elif first and last and first == last:
-            status = "Checked In"
+        if first:
+            status = "Present"
+            last_display = last if (first != last or appearances > 1) else None
         else:
             status = "Absent"
+            first = None
+            last_display = None
 
         return {
             "label": label,
@@ -310,8 +362,10 @@ class AttendancePage(QWidget):
             "employee_code": emp_code or "",
             "department": dept_name or "",
             "first": first,
-            "last": last,
+            "last": last_display,
+            "raw_last": last or first or "",
             "camera": camera,
+            "snapshot_path": snapshot_path,
             "appearances": appearances,
             "max_confidence": max_conf,
             "status": status,
@@ -352,8 +406,8 @@ class AttendancePage(QWidget):
                 return False
             rows = [r for r in rows if matches(r)]
 
-        # sort: present first then label
-        rows.sort(key=lambda x: (not x.get("present"), x.get("label", "").lower()))
+        # sort: present first ordered by most recent camera detection (raw_last DESC), then label
+        rows.sort(key=lambda x: (not x.get("present"), str(x.get("raw_last") or "")), reverse=True)
         self._populate_table(rows)
 
     def _populate_table(self, records):
@@ -388,10 +442,27 @@ class AttendancePage(QWidget):
             cam = rec.get("camera") or "-"
             self._table.setItem(row_idx, 5, QTableWidgetItem(cam))
 
+            # snapshot thumbnail
+            snap_path = rec.get("snapshot_path")
+            if snap_path and os.path.exists(snap_path):
+                lbl_snap = QLabel()
+                pix = QPixmap(snap_path)
+                if not pix.isNull():
+                    pix = pix.scaled(44, 44, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    lbl_snap.setPixmap(pix)
+                    lbl_snap.setCursor(Qt.PointingHandCursor)
+                    lbl_snap.setToolTip("Click to view full snapshot")
+                    lbl_snap.mousePressEvent = lambda event, path=snap_path: self._show_snapshot_dialog(path)
+                    self._table.setCellWidget(row_idx, 6, lbl_snap)
+                else:
+                    self._table.setItem(row_idx, 6, QTableWidgetItem("-"))
+            else:
+                self._table.setItem(row_idx, 6, QTableWidgetItem("-"))
+
             # status with light color hints
             status = rec.get("status") or ""
             item_status = QTableWidgetItem(status)
-            if status == "Complete":
+            if status == "Complete" or status == "Present":
                 item_status.setBackground(QBrush(QColor(220, 249, 231)))
                 item_status.setForeground(QBrush(QColor(0, 120, 60)))
             elif status == "Checked In":
@@ -400,14 +471,41 @@ class AttendancePage(QWidget):
             elif status == "Absent":
                 item_status.setBackground(QBrush(QColor(255, 237, 237)))
                 item_status.setForeground(QBrush(QColor(160, 40, 40)))
-            self._table.setItem(row_idx, 6, item_status)
+            self._table.setItem(row_idx, 7, item_status)
 
             # confidence
             conf = rec.get("max_confidence")
-            conf_text = "-" if conf is None else (f"{conf:.1f}%" if isinstance(conf, (int, float)) else str(conf))
+            if conf is None:
+                conf_text = "-"
+            elif isinstance(conf, (int, float)):
+                val = conf * 100.0 if conf <= 1.0 else conf
+                conf_text = f"{val:.1f}%"
+            else:
+                conf_text = str(conf)
             item_conf = QTableWidgetItem(conf_text)
             item_conf.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self._table.setItem(row_idx, 7, item_conf)
+            self._table.setItem(row_idx, 8, item_conf)
+
+        self._table.setSortingEnabled(True)
+        self._count_label.setText(f"{len(records)} records")
+
+    def _show_snapshot_dialog(self, path: str):
+        """Display snapshot image popup modal."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Detection Snapshot")
+        dialog.setMinimumSize(640, 480)
+        d_layout = QVBoxLayout(dialog)
+        img_lbl = QLabel()
+        pix = QPixmap(path)
+        if not pix.isNull():
+            img_lbl.setPixmap(pix.scaled(720, 540, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        img_lbl.setAlignment(Qt.AlignCenter)
+        d_layout.addWidget(img_lbl)
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; font-weight:bold; padding:8px 20px; border-radius:6px; }")
+        btn_close.clicked.connect(dialog.accept)
+        d_layout.addWidget(btn_close, alignment=Qt.AlignCenter)
+        dialog.exec()
 
         self._table.setSortingEnabled(True)
         self._count_label.setText(f"{len(records)} records")
@@ -416,10 +514,11 @@ class AttendancePage(QWidget):
         if not iso_str:
             return "-"
         try:
-            dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-            return dt.strftime("%H:%M:%S")
+            dt = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
+            local_dt = dt.astimezone()
+            return local_dt.strftime("%I:%M:%S %p")
         except Exception:
-            return iso_str
+            return str(iso_str)
 
     def _export_csv(self):
         """Export visible rows to CSV for the selected date."""

@@ -25,8 +25,17 @@ from ui.backend_process import writable_app_dir  # noqa: E402
 
 _DEFAULT_TENANT = "default"
 
-# Path to the backend's database
-_BACKEND_DB = os.getenv("PYTHON_DB_PATH") or str(writable_app_dir() / "data" / "app.db")
+def _resolve_backend_db() -> str:
+    env_path = os.getenv("PYTHON_DB_PATH")
+    if env_path:
+        return env_path
+    if not getattr(sys, "frozen", False):
+        local_db = os.path.join(_PROJECT_ROOT, "python_recognizer", "data", "app.db")
+        if os.path.exists(local_db):
+            return local_db
+    return str(writable_app_dir() / "data" / "app.db")
+
+_BACKEND_DB = _resolve_backend_db()
 
 
 class Database:
@@ -145,12 +154,32 @@ class Database:
     # ── Attendance ──────────────────────────────────────────────────────
 
     def list_attendance(self, attendance_date: str | None = None) -> list[dict]:
+        # Try fetching live attendance from running FastAPI backend API first (same endpoint as admin.html)
+        try:
+            from ui.backend_client import BackendClient
+            client = BackendClient(timeout=2.0)
+            live_records = client.get_attendance(attendance_date)
+            if live_records:
+                return live_records
+        except Exception:
+            pass
+
         records = self._store.list_attendance(_DEFAULT_TENANT)
         if attendance_date:
-            return [
-                record for record in records
-                if str(record.get("attendance_date") or record.get("last_appearance", "")[:10]) == attendance_date
-            ]
+            matched = []
+            for record in records:
+                rec_date = record.get("attendance_date")
+                if not rec_date and (record.get("last_appearance") or record.get("first_appearance")):
+                    ts = str(record.get("last_appearance") or record.get("first_appearance"))
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        rec_date = dt.astimezone().strftime("%Y-%m-%d")
+                    except Exception:
+                        rec_date = ts[:10]
+                if rec_date == attendance_date:
+                    matched.append(record)
+            return matched
         return records
 
     def recent_attendance(self, limit: int = 10) -> list[dict]:

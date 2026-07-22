@@ -657,12 +657,11 @@ class SQLiteStore:
                        GROUP_CONCAT(ed.department_id) AS department_ids
                 FROM known_faces f
                 JOIN face_embeddings e ON e.label = f.label
-                JOIN employees emp ON emp.id = e.employee_id AND emp.tenant_id = ?
+                LEFT JOIN employees emp ON emp.id = e.employee_id
                 LEFT JOIN employee_departments ed ON ed.employee_id = emp.id
                 GROUP BY e.id
                 ORDER BY f.label COLLATE NOCASE, e.id ASC
-                """,
-                (tenant,),
+                """
             ).fetchall()
             grouped: dict[str, tuple[str, list[tuple[Any, str | None, list[str], bool]], str]] = {}
             prefix = f"{tenant}::"
@@ -703,8 +702,9 @@ class SQLiteStore:
         snapshot_path: str | None = None,
     ) -> dict[str, Any]:
         role = camera_role if camera_role in {"general", "check_in", "check_out"} else "general"
+        tenant = normalize_tenant_id(tenant_id)
         attendance_date = timestamp[:10]
-        stored_label = scope_key(tenant_id, f"{label}::{attendance_date}")
+        stored_label = f"{tenant}::{label}::{attendance_date}"
         with self._lock, self.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM attendance_records WHERE label = ?", (stored_label,)
@@ -733,11 +733,16 @@ class SQLiteStore:
                     "max_confidence": float(confidence),
                 }
             else:
-                previous_last = datetime.fromisoformat(str(row["last_appearance"]))
-                current = datetime.fromisoformat(timestamp)
-                appearances = int(row["appearances"])
-                if (current - previous_last).total_seconds() * 1000.0 >= cooldown_ms:
-                    appearances += 1
+                try:
+                    previous_last = datetime.fromisoformat(str(row["last_appearance"]).replace("Z", "+00:00"))
+                    current = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                    seconds = (current - previous_last).total_seconds()
+                    if seconds * 1000.0 >= cooldown_ms:
+                        appearances = int(row["appearances"]) + 1
+                    else:
+                        appearances = int(row["appearances"])
+                except Exception:
+                    appearances = int(row["appearances"]) + 1
                 first_role = str(row["first_camera_role"] or "general")
                 record = {
                     "label": label,

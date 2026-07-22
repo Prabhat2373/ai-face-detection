@@ -35,6 +35,19 @@ class BackendClient:
     def stop(self) -> dict:
         return self._json("POST", "/stop", {})
 
+    def get_attendance(self, date: str | None = None) -> list[dict]:
+        """Fetch attendance records directly from backend API (same endpoint used by admin.html)."""
+        try:
+            path = f"/attendance?date={date}" if date else "/attendance"
+            res = self._json("GET", path)
+            if isinstance(res, dict) and "attendance" in res:
+                return res["attendance"]
+            if isinstance(res, list):
+                return res
+            return []
+        except Exception:
+            return []
+
     def save_employee(self, payload: dict) -> dict:
         """Create or update an employee on the backend API."""
         emp_id = payload.get("id")
