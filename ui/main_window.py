@@ -60,7 +60,8 @@ class Sidebar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
-        self.setFixedWidth(230)
+        # Keep sidebar width consistent with the stylesheet (220px)
+        self.setFixedWidth(220)
         self._buttons: Dict[str, QPushButton] = {}
         self._build_ui()
 
@@ -136,13 +137,22 @@ class Sidebar(QFrame):
                     icon_path = ""
 
                 # NavButton accepts: NavButton(text, icon_char="", icon_path="", parent=None)
+                # btn = NavButton(label_text, "", icon_path)
+                # btn.setProperty("page_key", key)
+                # btn.setProperty("class", "nav-btn")
                 btn = NavButton(label_text, "", icon_path)
+                btn.setCheckable(True)
+                btn.setAutoExclusive(True)
+
                 btn.setProperty("page_key", key)
                 btn.setProperty("class", "nav-btn")
+
                 btn.clicked.connect(lambda _checked=False, k=key: self._on_nav_clicked(k))
                 self._buttons[key] = btn
-                # Add left margin so icons align with section labels
-                btn.setContentsMargins(8, 0, 8, 0)
+                # Do not add extra outer left margin here. Alignment is controlled
+                # by the stylesheet padding-left so the active left-accent does not
+                # cause content to shift. Keep a small right margin for spacing.
+                btn.setContentsMargins(0, 0, 8, 0)
                 layout.addWidget(btn)
 
         layout.addStretch()
@@ -315,12 +325,14 @@ class MainWindow(QMainWindow):
             return
 
         # Update sidebar button visual state
+        # for key, btn in self.sidebar.buttons.items():
+        #     checked = (key == page_key)
+        #     btn.setChecked(checked)
+        #     btn.setProperty("class", "nav-btn active" if checked else "nav-btn")
+        #     btn.style().unpolish(btn)
+        #     btn.style().polish(btn)
         for key, btn in self.sidebar.buttons.items():
-            checked = (key == page_key)
-            btn.setChecked(checked)
-            btn.setProperty("class", "nav-btn active" if checked else "nav-btn")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            btn.setChecked(key == page_key)
 
         # Switch page
         self.stack.setCurrentWidget(self._pages[page_key])

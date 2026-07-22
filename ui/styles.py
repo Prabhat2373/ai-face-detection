@@ -73,18 +73,21 @@ QLabel[class="nav-section"] {{
 
 /* Sidebar nav button: reserve left border so activation doesn't shift content */
 QPushButton[class="nav-btn"] {{
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    color: {text};
-    font-size: 14px;
-    font-weight: 600;
-    padding: 12px 15px;
-    padding-left: 18px;
-    text-align: left;
-    border-left: 3px solid transparent;
-    box-sizing: border-box;
-}}
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	color: {text};
+	font-size: 14px;
+	font-weight: 600;
+	padding: 12px 15px;
+	/* Increase internal left padding so text/icons align with section labels
+	   and to reserve space for the left accent (border-left). Avoid using
+	   external layout margins which can create inconsistent spacing. */
+
+	text-align: left;
+	/* Slightly larger reserved accent width for a crisp visual */
+	box-sizing: border-box;
+	}}
 
 QPushButton[class="nav-btn"]:hover {{
     background: {surface_2};
@@ -92,12 +95,16 @@ QPushButton[class="nav-btn"]:hover {{
 
 /* Active nav button: show a left accent without shifting layout.
    The transparent left border is reserved by the base rule, so changing
-   the border-left-color here provides the accent without moving content. */
+   the border-left-color here provides the accent without moving content.
+   Also give the active background a small radius so the visual matches
+   the app's rounded panels. */
 QPushButton[class="nav-btn"]:checked,
 QPushButton[class="nav-btn active"] {{
-    background: {selection};
-    color: {primary};
-    border-left-color: {primary};
+	background: {selection};
+	color: {primary};
+	border-left-color: {primary};
+	border-top-left-radius: 6px;
+	border-bottom-left-radius: 6px;
 }}
 
 QFrame[class="panel"], QFrame[class="stat-card"] {{
