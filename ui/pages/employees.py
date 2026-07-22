@@ -281,7 +281,8 @@ class EmployeesPage(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self._table.setColumnWidth(5, 140)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -416,26 +417,23 @@ class EmployeesPage(QWidget):
 
     def _build_action_widget(self, employee: dict) -> QWidget:
         widget = QWidget()
-        widget.setMinimumHeight(42)
         widget.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setSpacing(14)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignCenter)
 
         edit_btn = QPushButton()
         edit_btn.setIcon(get_edit_icon("#ffffff", 16))
         edit_btn.setIconSize(QSize(16, 16))
         edit_btn.setToolTip("Edit Employee")
         edit_btn.setCursor(Qt.PointingHandCursor)
+        edit_btn.setFixedSize(36, 28)
         edit_btn.setStyleSheet("""
             QPushButton {
                 background: #1a73e8;
-                color: #ffffff;
                 border: none;
                 border-radius: 6px;
-                padding: 6px 10px;
-                min-width: 32px;
-                min-height: 28px;
             }
             QPushButton:hover {
                 background: #1557b0;
@@ -444,20 +442,23 @@ class EmployeesPage(QWidget):
         edit_btn.clicked.connect(lambda _checked=False, emp=employee: self._edit_employee(emp))
         layout.addWidget(edit_btn)
 
+        # Physical 12px gap spacer widget
+        gap_spacer = QLabel()
+        gap_spacer.setFixedWidth(12)
+        gap_spacer.setStyleSheet("background: transparent;")
+        layout.addWidget(gap_spacer)
+
         delete_btn = QPushButton()
         delete_btn.setIcon(get_delete_icon("#ffffff", 16))
         delete_btn.setIconSize(QSize(16, 16))
         delete_btn.setToolTip("Delete Employee")
         delete_btn.setCursor(Qt.PointingHandCursor)
+        delete_btn.setFixedSize(36, 28)
         delete_btn.setStyleSheet("""
             QPushButton {
                 background: #ef4444;
-                color: #ffffff;
                 border: none;
                 border-radius: 6px;
-                padding: 6px 10px;
-                min-width: 32px;
-                min-height: 28px;
             }
             QPushButton:hover {
                 background: #dc2626;
@@ -465,8 +466,6 @@ class EmployeesPage(QWidget):
         """)
         delete_btn.clicked.connect(lambda _checked=False, emp=employee: self._delete_employee(emp))
         layout.addWidget(delete_btn)
-
-        layout.addStretch()
         return widget
 
     def _edit_employee(self, employee: dict):

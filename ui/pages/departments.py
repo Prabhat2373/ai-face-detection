@@ -144,11 +144,13 @@ class DepartmentsPage(QWidget):
         ])
         self._table.horizontalHeader().setStretchLastSection(False)
         header_view = self._table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.Fixed)
+        self._table.setColumnWidth(4, 140)
+
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -230,9 +232,10 @@ class DepartmentsPage(QWidget):
 
     def _build_action_widget(self, department: dict) -> QWidget:
         widget = QWidget()
+        widget.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(6, 3, 6, 3)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(0)
         layout.setAlignment(Qt.AlignCenter)
 
         edit_btn = QPushButton()
@@ -240,16 +243,30 @@ class DepartmentsPage(QWidget):
         edit_btn.setIconSize(QSize(16, 16))
         edit_btn.setToolTip("Edit Department")
         edit_btn.setCursor(Qt.PointingHandCursor)
-        edit_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:none; border-radius:6px; padding:6px 10px; min-width:32px; min-height:28px; } QPushButton:hover { background:#1557b0; }")
+        edit_btn.setFixedSize(36, 28)
+        edit_btn.setStyleSheet(
+            "QPushButton { background: #1a73e8; border: none; border-radius: 6px; } "
+            "QPushButton:hover { background: #1557b0; }"
+        )
         edit_btn.clicked.connect(lambda _checked=False, dept=department: self._edit_department(dept))
         layout.addWidget(edit_btn)
+
+        # Physical 12px gap spacer widget
+        gap_spacer = QLabel()
+        gap_spacer.setFixedWidth(12)
+        gap_spacer.setStyleSheet("background: transparent;")
+        layout.addWidget(gap_spacer)
 
         delete_btn = QPushButton()
         delete_btn.setIcon(get_delete_icon("#ffffff", 16))
         delete_btn.setIconSize(QSize(16, 16))
         delete_btn.setToolTip("Delete Department")
         delete_btn.setCursor(Qt.PointingHandCursor)
-        delete_btn.setStyleSheet("QPushButton { background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 10px; min-width:32px; min-height:28px; } QPushButton:hover { background:#dc2626; }")
+        delete_btn.setFixedSize(36, 28)
+        delete_btn.setStyleSheet(
+            "QPushButton { background: #ef4444; border: none; border-radius: 6px; } "
+            "QPushButton:hover { background: #dc2626; }"
+        )
         delete_btn.clicked.connect(lambda _checked=False, dept=department: self._delete_department(dept))
         layout.addWidget(delete_btn)
         return widget

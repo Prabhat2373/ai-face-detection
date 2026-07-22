@@ -105,7 +105,8 @@ class AlarmsPage(QWidget):
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Timestamp
         header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Confidence
         header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Status
-        header_view.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Action
+        header_view.setSectionResizeMode(6, QHeaderView.Fixed)             # Action
+        self._table.setColumnWidth(6, 110)
 
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -265,10 +266,21 @@ class AlarmsPage(QWidget):
 
             # Action button
             if snap_path and os.path.exists(snap_path):
+                action_widget = QWidget()
+                action_widget.setStyleSheet("background: transparent;")
+                action_layout = QHBoxLayout(action_widget)
+                action_layout.setContentsMargins(4, 2, 4, 2)
+                action_layout.setAlignment(Qt.AlignCenter)
+
                 btn_view = QPushButton("View")
-                btn_view.setStyleSheet("QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border-radius: 4px; padding: 4px 12px; } QPushButton:hover { background: #1765cc; }")
+                btn_view.setCursor(Qt.PointingHandCursor)
+                btn_view.setStyleSheet(
+                    "QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border: none; border-radius: 6px; padding: 4px 14px; min-width: 64px; max-width: 64px; min-height: 28px; max-height: 28px; } "
+                    "QPushButton:hover { background: #1557b0; }"
+                )
                 btn_view.clicked.connect(lambda _, path=snap_path: self._show_snapshot_dialog(path))
-                self._table.setCellWidget(row_idx, 6, btn_view)
+                action_layout.addWidget(btn_view)
+                self._table.setCellWidget(row_idx, 6, action_widget)
             else:
                 self._table.setItem(row_idx, 6, QTableWidgetItem("-"))
 

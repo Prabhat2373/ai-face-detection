@@ -169,8 +169,10 @@ class CamerasPage(QWidget):
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
-        for i in range(2, 7):
+        for i in range(2, 6):
             header_view.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(6, QHeaderView.Fixed)
+        self._table.setColumnWidth(6, 140)
 
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -232,9 +234,10 @@ class CamerasPage(QWidget):
 
             # Actions cell widget (Edit & Delete SVG icon buttons)
             action_widget = QWidget()
+            action_widget.setStyleSheet("background: transparent;")
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(6, 3, 6, 3)
-            action_layout.setSpacing(8)
+            action_layout.setContentsMargins(8, 4, 8, 4)
+            action_layout.setSpacing(0)
             action_layout.setAlignment(Qt.AlignCenter)
 
             btn_edit = QPushButton()
@@ -242,24 +245,31 @@ class CamerasPage(QWidget):
             btn_edit.setIconSize(QSize(16, 16))
             btn_edit.setToolTip("Edit Camera")
             btn_edit.setCursor(Qt.PointingHandCursor)
+            btn_edit.setFixedSize(36, 28)
             btn_edit.setStyleSheet(
-                "QPushButton { background: #1a73e8; color: #ffffff; border: none; border-radius: 6px; padding: 6px 10px; min-width: 32px; min-height: 28px; } "
+                "QPushButton { background: #1a73e8; border: none; border-radius: 6px; } "
                 "QPushButton:hover { background: #1557b0; }"
             )
             btn_edit.clicked.connect(lambda _, camera=cam: self._edit_camera(camera))
+            action_layout.addWidget(btn_edit)
+
+            # Physical 12px gap spacer widget
+            gap_spacer = QLabel()
+            gap_spacer.setFixedWidth(12)
+            gap_spacer.setStyleSheet("background: transparent;")
+            action_layout.addWidget(gap_spacer)
 
             btn_delete = QPushButton()
             btn_delete.setIcon(get_delete_icon("#ffffff", 16))
             btn_delete.setIconSize(QSize(16, 16))
             btn_delete.setToolTip("Delete Camera")
             btn_delete.setCursor(Qt.PointingHandCursor)
+            btn_delete.setFixedSize(36, 28)
             btn_delete.setStyleSheet(
-                "QPushButton { background: #ef4444; color: #ffffff; border: none; border-radius: 6px; padding: 6px 10px; min-width: 32px; min-height: 28px; } "
+                "QPushButton { background: #ef4444; border: none; border-radius: 6px; } "
                 "QPushButton:hover { background: #dc2626; }"
             )
             btn_delete.clicked.connect(lambda _, camera=cam: self._delete_camera(camera))
-
-            action_layout.addWidget(btn_edit)
             action_layout.addWidget(btn_delete)
             self._table.setCellWidget(row_idx, 6, action_widget)
 

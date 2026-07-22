@@ -16,7 +16,8 @@ from datetime import date, datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QLineEdit, QMessageBox, QDateEdit, QComboBox, QListView, QDialog,
+    QScrollArea, QLineEdit, QMessageBox, QDateEdit, QCalendarWidget, QComboBox, QListView, QDialog,
+    QFileDialog,
 )
 from PySide6.QtCore import QDate, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QPixmap
@@ -120,21 +121,20 @@ class AttendancePage(QWidget):
         self.date_input.setMinimumWidth(150)
         self.date_input.setButtonSymbols(QDateEdit.UpDownArrows)
         self.date_input.dateChanged.connect(self.refresh)
-        f_layout.addWidget(self.date_input)
 
-        # Make the calendar popup use the app's light styling (avoid transparent/system theme)
-        try:
-            cal = self.date_input.calendarWidget()
-            if cal is not None:
-                cal.setAutoFillBackground(True)
-                cal.setStyleSheet(
-                    "QCalendarWidget { background: #ffffff; color: #111827; selection-background-color: #e8f0fe; selection-color: #ffffff; }"
-                    "QCalendarWidget QToolButton { background: #f8fafc; color: #111827; border: 1px solid #e5e7eb; }"
-                    "QCalendarWidget QAbstractItemView { background: #ffffff; color: #111827; selection-background-color: #e8f0fe; selection-color: #ffffff; }"
-                    "QCalendarWidget QMenu { background: #ffffff; color: #111827; }"
-                )
-        except Exception:
-            pass
+        # Configure clean spacious calendar popup with solid white background
+        cal = self.date_input.calendarWidget()
+        if cal is not None:
+            cal.setAutoFillBackground(True)
+            cal.setStyleSheet(
+                "QCalendarWidget, QCalendarWidget QWidget, QCalendarWidget QTableView, QCalendarWidget QAbstractItemView { "
+                "background-color: #ffffff !important; background: #ffffff !important; color: #111827 !important; }"
+            )
+            cal.setMinimumSize(380, 310)
+            cal.setHorizontalHeaderFormat(QCalendarWidget.ShortDayNames)
+            cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+            cal.setGridVisible(False)
+        f_layout.addWidget(self.date_input)
 
         # Department filter (use a styled QListView for consistent popup visuals)
         self.dept_filter = QComboBox()
@@ -521,18 +521,27 @@ class AttendancePage(QWidget):
             return str(iso_str)
 
     def _export_csv(self):
-        """Export visible rows to CSV for the selected date."""
+        """Export visible rows to CSV with native Save File dialog."""
         try:
             sel_date = self.date_input.date().toString("yyyy-MM-dd")
-            export_dir = writable_app_dir() / "exports"
-            export_dir.mkdir(parents=True, exist_ok=True)
-            path = export_dir / f"attendance-{sel_date}.csv"
+            default_filename = f"attendance-{sel_date}.csv"
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Attendance CSV",
+                default_filename,
+                "CSV Files (*.csv);;All Files (*)"
+            )
+            if not save_path:
+                return  # User cancelled the save dialog
+
             import csv
             rows = []
             for r in range(self._table.rowCount()):
+                name_cell = (self._table.item(r, 1).text() if self._table.item(r, 1) else "").replace("\n", " - ")
                 rows.append({
                     "index": self._table.item(r, 0).text() if self._table.item(r, 0) else "",
-                    "name": self._table.item(r, 1).text() if self._table.item(r, 1) else "",
+                    "name": name_cell,
                     "department": self._table.item(r, 2).text() if self._table.item(r, 2) else "",
                     "first": self._table.item(r, 3).text() if self._table.item(r, 3) else "",
                     "last": self._table.item(r, 4).text() if self._table.item(r, 4) else "",
@@ -540,11 +549,16 @@ class AttendancePage(QWidget):
                     "status": self._table.item(r, 6).text() if self._table.item(r, 6) else "",
                     "confidence": self._table.item(r, 7).text() if self._table.item(r, 7) else "",
                 })
-            with open(path, "w", newline="", encoding="utf-8") as f:
+            with open(save_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["Index", "Name", "Department", "Check-In", "Check-Out", "Camera", "Status", "Confidence"])
                 for r in rows:
                     writer.writerow([r["index"], r["name"], r["department"], r["first"], r["last"], r["camera"], r["status"], r["confidence"]])
-            QMessageBox.information(self, "Export Complete", f"Attendance exported to\n{path}")
+
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Attendance records successfully saved to:\n{save_path}"
+            )
         except Exception as e:
             QMessageBox.warning(self, "Export Error", str(e))

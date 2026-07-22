@@ -231,45 +231,96 @@ QComboBox::down-arrow, QDateEdit::down-arrow {{
     height: 0px;
 }}
 
-QCalendarWidget, QCalendarWidget QWidget {{
-    background: {surface};
+QCalendarWidget,
+QCalendarWidget QWidget,
+QCalendarWidget QTableView,
+QCalendarWidget QAbstractItemView {{
+    background-color: #ffffff;
+    background: #ffffff;
     color: {text};
+}}
+
+QCalendarWidget {{
+    border: 1px solid {line};
+    border-radius: 10px;
+}}
+
+QCalendarWidget QWidget#qt_calendar_navigationbar {{
+    background-color: {surface_2};
+    background: {surface_2};
+    border-bottom: 1px solid {line};
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
+    min-height: 42px;
 }}
 
 QCalendarWidget QToolButton {{
-    background: {surface_2};
-    border: 1px solid {line};
-    border-radius: 6px;
     color: {text};
-    padding: 6px 10px;
-}}
-
-QCalendarWidget QToolButton:hover {{
-    border-color: {primary};
-    color: {primary};
-}}
-
-QCalendarWidget QMenu {{
-    background: {surface};
-    border: 1px solid {line};
-    color: {text};
-}}
-
-QCalendarWidget QSpinBox {{
-    background: {surface_2};
-    color: {text};
-    border: 1px solid {line};
+    font-weight: 700;
+    font-size: 13px;
+    icon-size: 18px;
+    background-color: transparent;
+    border: 1px solid transparent;
     border-radius: 6px;
     padding: 4px 8px;
 }}
 
-QCalendarWidget QAbstractItemView {{
-    background: {surface};
-    alternate-background-color: {surface_2};
+QCalendarWidget QToolButton:hover {{
+    background-color: {selection};
+    color: {primary};
+}}
+
+QCalendarWidget QToolButton::menu-indicator {{
+    image: none;
+    width: 0px;
+}}
+
+QCalendarWidget QMenu {{
+    background-color: #ffffff;
     color: {text};
+    border: 1px solid {line};
+    border-radius: 6px;
+    padding: 4px;
+}}
+
+QCalendarWidget QMenu::item:selected {{
+    background-color: {primary};
+    color: #ffffff;
+}}
+
+QCalendarWidget QSpinBox {{
+    background-color: #ffffff;
+    color: {text};
+    border: 1px solid {line};
+    border-radius: 6px;
+    font-weight: 700;
+    padding: 4px 8px;
+}}
+
+QCalendarWidget QTableView {{
+    background-color: #ffffff;
+    border: none;
+    border-radius: 0px;
     selection-background-color: {primary};
     selection-color: #ffffff;
     outline: none;
+}}
+
+QCalendarWidget QAbstractItemView:enabled {{
+    background-color: #ffffff;
+    color: {text};
+    font-size: 12px;
+    font-weight: 500;
+    selection-background-color: {primary};
+    selection-color: #ffffff;
+    outline: none;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+}}
+
+QCalendarWidget QAbstractItemView:disabled {{
+    color: {muted};
 }}
 
 QTableWidget, QTableView {{
