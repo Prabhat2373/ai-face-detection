@@ -6,10 +6,10 @@ from PySide6.QtWidgets import (
     QScrollArea, QLineEdit, QMessageBox,
     QDialog, QFormLayout, QTextEdit, QDialogButtonBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from typing import Optional
 
-from ..widgets import SectionHeader
+from ..widgets import SectionHeader, get_edit_icon, get_delete_icon
 from ..database import Database
 
 
@@ -231,19 +231,27 @@ class DepartmentsPage(QWidget):
     def _build_action_widget(self, department: dict) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignCenter)
 
-        edit_btn = QPushButton("Edit")
-        edit_btn.setStyleSheet("QPushButton { background:#fff; color:#1a73e8; border:1px solid #cfe0ff; border-radius:6px; padding:5px 14px; font-weight:700; min-width:58px; } QPushButton:hover { background:#eef4ff; border-color:#1a73e8; }")
+        edit_btn = QPushButton()
+        edit_btn.setIcon(get_edit_icon("#ffffff", 16))
+        edit_btn.setIconSize(QSize(16, 16))
+        edit_btn.setToolTip("Edit Department")
+        edit_btn.setCursor(Qt.PointingHandCursor)
+        edit_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:none; border-radius:6px; padding:6px 10px; min-width:32px; min-height:28px; } QPushButton:hover { background:#1557b0; }")
         edit_btn.clicked.connect(lambda _checked=False, dept=department: self._edit_department(dept))
         layout.addWidget(edit_btn)
 
-        delete_btn = QPushButton("Delete")
-        delete_btn.setStyleSheet("QPushButton { background:#fff; color:#dc2626; border:1px solid rgba(220,38,38,.28); border-radius:6px; padding:5px 14px; font-weight:700; min-width:58px; } QPushButton:hover { background:rgba(220,38,38,.08); border-color:#dc2626; }")
+        delete_btn = QPushButton()
+        delete_btn.setIcon(get_delete_icon("#ffffff", 16))
+        delete_btn.setIconSize(QSize(16, 16))
+        delete_btn.setToolTip("Delete Department")
+        delete_btn.setCursor(Qt.PointingHandCursor)
+        delete_btn.setStyleSheet("QPushButton { background:#ef4444; color:#ffffff; border:none; border-radius:6px; padding:6px 10px; min-width:32px; min-height:28px; } QPushButton:hover { background:#dc2626; }")
         delete_btn.clicked.connect(lambda _checked=False, dept=department: self._delete_department(dept))
         layout.addWidget(delete_btn)
-        layout.addStretch()
         return widget
 
     def _edit_department(self, department: dict):

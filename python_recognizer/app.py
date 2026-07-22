@@ -358,8 +358,23 @@ class FaceEngine:
         should_alarm = self._should_alarm_camera(camera_key, unknown_faces)
         camera_record = self.store.get_camera(camera_id, tenant) if camera_id else None
         camera_name = str(camera_record.get("name") or "") if camera_record else None
-        if self.alarm_enabled and unknown_faces:
-            if should_alarm:
+        if unknown_faces:
+            now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
+            last_logged = float(self._camera_alarm_state[camera_key].get("last_logged_alarm_at") or 0.0)
+            # De-duplicate alarm logging: log 1 single alarm record per 5 seconds per camera
+            if now_ms - last_logged >= 5000.0:
+                self._camera_alarm_state[camera_key]["last_logged_alarm_at"] = now_ms
+                alarm_record = {
+                    "reason": "unknown_person",
+                    "cameraRole": camera_role,
+                    "cameraId": camera_id,
+                    "cameraName": camera_name,
+                    "timestamp": iso_now(),
+                    "faces": unknown_faces,
+                    "snapshot": snapshot,
+                }
+                self.store.enqueue_sync_event("alarm.triggered", alarm_record)
+            if self.alarm_enabled and should_alarm:
                 self._trigger_alarm(
                     image,
                     camera_role,
@@ -1023,12 +1038,65 @@ class FaceEngine:
             if not force and now_ms - self._last_snapshot_at < self.snapshot_cooldown_ms:
                 return None
 
-        best_face = max(faces, key=lambda face: float(face["confidence"]))
+        best_face = max(faces, key=lambda face: float(face.get("confidence") or 0.0))
         timestamp = iso_now().replace(":", "-").replace("+", "-")
         filename = f"{reason}-{timestamp}.jpg"
         path = self.snapshot_path / filename
         self.snapshot_path.mkdir(parents=True, exist_ok=True)
-        ok = cv2.imwrite(str(path), image)
+
+        # Annotate bounding boxes around known and unknown faces
+        annotated = image.copy()
+        for face in faces:
+            box = face.get("box") or {}
+            x = int(box.get("x") or 0)
+            y = int(box.get("y") or 0)
+            w = int(box.get("width") or box.get("w") or 0)
+            h = int(box.get("height") or box.get("h") or 0)
+            if w <= 0 or h <= 0:
+                continue
+
+            match = face.get("match") or {}
+            is_known = bool(match and match.get("label"))
+
+            if is_known:
+                # Green box for known employee
+                color = (0, 200, 0)
+                label_name = str(match.get("label"))
+                if "::" in label_name:
+                    parts = label_name.split("::")
+                    if len(parts) >= 2:
+                        label_name = parts[1]
+                label_text = f"{label_name} ({float(face.get('confidence') or 0.0):.0%})"
+            else:
+                # Red box for unknown person
+                color = (0, 0, 220)
+                label_text = f"UNKNOWN ({float(face.get('confidence') or 0.0):.0%})"
+
+            # Draw face rectangle
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
+
+            # Draw background banner for label text
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.55
+            thickness = 1
+            (text_w, text_h), baseline = cv2.getTextSize(label_text, font, font_scale, thickness)
+            banner_y1 = max(0, y - text_h - 8)
+            banner_y2 = y
+            cv2.rectangle(annotated, (x, banner_y1), (x + text_w + 10, banner_y2), color, -1)
+
+            # Draw label text
+            cv2.putText(
+                annotated,
+                label_text,
+                (x + 5, max(text_h + 2, y - 4)),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+
+        ok = cv2.imwrite(str(path), annotated)
         if not ok:
             return None
         with self._snapshot_lock:
@@ -1036,7 +1104,7 @@ class FaceEngine:
         return {
             "path": str(path),
             "timestamp": iso_now(),
-            "confidence": float(best_face["confidence"]),
+            "confidence": float(best_face.get("confidence") or 0.0),
         }
 
     def _trigger_alarm(
@@ -1554,6 +1622,13 @@ async def attendance(x_tenant_id: str | None = Header(default=None)) -> dict[str
 @app.get("/alarms")
 async def alarms(limit: int = 100) -> dict[str, Any]:
     return {"alarms": await asyncio.to_thread(engine.store.list_alarm_events, limit)}
+
+
+@app.delete("/alarms")
+@app.post("/alarms/clear")
+async def clear_alarms() -> dict[str, Any]:
+    await asyncio.to_thread(engine.store.clear_sync_events)
+    return {"ok": True}
 
 
 @app.get("/sync/status")

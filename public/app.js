@@ -4,6 +4,9 @@
   const isLivePage = pageType === "live";
   const isAdminPage = pageType === "admin";
 
+  const EDIT_ICON_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-pen"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>`;
+  const DELETE_ICON_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash"><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
   const el = (id) => document.getElementById(id);
   const stream = el("stream");
   const canvas = el("overlay");
@@ -390,8 +393,8 @@
                   <div class="small">${camera.enabled ? "Enabled" : "Disabled"}</div>
                 </div>
                 <div class="actions-inline">
-                  <button data-camera-edit="${camera.id}">Edit</button>
-                  <button data-camera-delete="${camera.id}">Delete</button>
+                  <button data-camera-edit="${camera.id}" title="Edit Camera" class="btn-icon-action btn-edit">${EDIT_ICON_HTML}</button>
+                  <button data-camera-delete="${camera.id}" title="Delete Camera" class="btn-icon-action btn-delete">${DELETE_ICON_HTML}</button>
                 </div>
               </div>
             `,
@@ -611,8 +614,8 @@
                 <div class="small">${department.description || ""}</div>
               </div>
               <div class="actions-inline">
-                <button data-department-edit="${department.id}">Edit</button>
-                <button data-department-delete="${department.id}">Delete</button>
+                <button data-department-edit="${department.id}" title="Edit Department" class="btn-icon-action btn-edit">${EDIT_ICON_HTML}</button>
+                <button data-department-delete="${department.id}" title="Delete Department" class="btn-icon-action btn-delete">${DELETE_ICON_HTML}</button>
               </div>
             </div>
           </div>
@@ -648,8 +651,8 @@
                 <div class="small">Photos: ${employee.photoCount || 0} · ${employee.active ? "Active" : "Inactive"}</div>
               </div>
               <div class="actions-inline">
-                <button data-employee-edit="${employee.id}">Edit</button>
-                <button data-employee-delete="${employee.id}">Delete</button>
+                <button data-employee-edit="${employee.id}" title="Edit Employee" class="btn-icon-action btn-edit">${EDIT_ICON_HTML}</button>
+                <button data-employee-delete="${employee.id}" title="Delete Employee" class="btn-icon-action btn-delete">${DELETE_ICON_HTML}</button>
               </div>
             </div>
           </div>

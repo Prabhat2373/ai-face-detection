@@ -9,7 +9,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from typing import Optional
 
-from ..widgets import SectionHeader, Pill
+from ..widgets import SectionHeader, Pill, get_edit_icon, get_delete_icon
+from PySide6.QtCore import QSize
+
+
 from ..database import Database
 
 
@@ -160,14 +163,15 @@ class CamerasPage(QWidget):
         self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels([
             "Name", "RTSP URL", "Role", "Username",
-            "Status", "Created", "Updated", "ID"
+            "Status", "Updated", "Actions", "ID"
         ])
         self._table.horizontalHeader().setStretchLastSection(False)
         header_view = self._table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
         for i in range(2, 7):
             header_view.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -175,7 +179,7 @@ class CamerasPage(QWidget):
             QTableWidget { alternate-background-color: rgba(155, 173, 200, 0.03); }
         """)
         self._table.verticalHeader().setVisible(False)
-        self._table.verticalHeader().setDefaultSectionSize(52)
+        self._table.verticalHeader().setDefaultSectionSize(54)
         self._table.setColumnHidden(7, True)  # Hide ID
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._context_menu)
@@ -216,17 +220,7 @@ class CamerasPage(QWidget):
             status_item.setForeground(Qt.green if enabled else Qt.gray)
             self._table.setItem(row_idx, 4, status_item)
 
-            created = cam.get("created_at", "")
-            if created:
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    created = dt.strftime("%b %d, %Y")
-                except Exception:
-                    pass
-            self._table.setItem(row_idx, 5, QTableWidgetItem(created))
-
-            updated = cam.get("updated_at", "")
+            updated = cam.get("updated_at") or cam.get("created_at") or ""
             if updated:
                 try:
                     from datetime import datetime
@@ -234,7 +228,41 @@ class CamerasPage(QWidget):
                     updated = dt.strftime("%b %d, %Y")
                 except Exception:
                     pass
-            self._table.setItem(row_idx, 6, QTableWidgetItem(updated))
+            self._table.setItem(row_idx, 5, QTableWidgetItem(updated))
+
+            # Actions cell widget (Edit & Delete SVG icon buttons)
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(6, 3, 6, 3)
+            action_layout.setSpacing(8)
+            action_layout.setAlignment(Qt.AlignCenter)
+
+            btn_edit = QPushButton()
+            btn_edit.setIcon(get_edit_icon("#ffffff", 16))
+            btn_edit.setIconSize(QSize(16, 16))
+            btn_edit.setToolTip("Edit Camera")
+            btn_edit.setCursor(Qt.PointingHandCursor)
+            btn_edit.setStyleSheet(
+                "QPushButton { background: #1a73e8; color: #ffffff; border: none; border-radius: 6px; padding: 6px 10px; min-width: 32px; min-height: 28px; } "
+                "QPushButton:hover { background: #1557b0; }"
+            )
+            btn_edit.clicked.connect(lambda _, camera=cam: self._edit_camera(camera))
+
+            btn_delete = QPushButton()
+            btn_delete.setIcon(get_delete_icon("#ffffff", 16))
+            btn_delete.setIconSize(QSize(16, 16))
+            btn_delete.setToolTip("Delete Camera")
+            btn_delete.setCursor(Qt.PointingHandCursor)
+            btn_delete.setStyleSheet(
+                "QPushButton { background: #ef4444; color: #ffffff; border: none; border-radius: 6px; padding: 6px 10px; min-width: 32px; min-height: 28px; } "
+                "QPushButton:hover { background: #dc2626; }"
+            )
+            btn_delete.clicked.connect(lambda _, camera=cam: self._delete_camera(camera))
+
+            action_layout.addWidget(btn_edit)
+            action_layout.addWidget(btn_delete)
+            self._table.setCellWidget(row_idx, 6, action_widget)
+
             self._table.setItem(row_idx, 7, QTableWidgetItem(cam.get("id", "")))
 
         self._count_label.setText(f"{len(cameras)} cameras")
@@ -261,12 +289,7 @@ class CamerasPage(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
 
-    def _edit_selected(self):
-        row = self._table.currentRow()
-        if row < 0:
-            return
-        cam_id = self._table.item(row, 7).text()
-        camera = next((c for c in self._cameras if c["id"] == cam_id), None)
+    def _edit_camera(self, camera: dict):
         if not camera:
             return
         dialog = CameraDialog(camera, self)
@@ -277,24 +300,49 @@ class CamerasPage(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
 
+    def _delete_camera(self, camera: dict):
+        if not camera:
+            return
+        cam_id = camera.get("id")
+        name = camera.get("name", "Camera")
+        reply = QMessageBox.question(
+            self, "Delete Camera",
+            f"Are you sure you want to delete camera '{name}'?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self.db.delete_camera(cam_id)
+                self.refresh()
+            except Exception as e:
+                QMessageBox.warning(self, "Error", str(e))
+
+    def _edit_selected(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return
+        cam_id = self._table.item(row, 7).text()
+        camera = next((c for c in self._cameras if c["id"] == cam_id), None)
+        self._edit_camera(camera)
+
     def _context_menu(self, pos):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
-                background: #16233d;
-                border: 1px solid rgba(155, 173, 200, 0.18);
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
                 border-radius: 8px;
                 padding: 4px;
             }
             QMenu::item {
                 padding: 8px 24px;
                 border-radius: 4px;
-                color: #edf3ff;
+                color: #111827;
             }
             QMenu::item:hover {
-                background: rgba(102, 224, 199, 0.12);
-                color: #66e0c7;
+                background: #eef4ff;
+                color: #1a73e8;
             }
         """)
         edit_action = menu.addAction("Edit Camera")
@@ -310,15 +358,5 @@ class CamerasPage(QWidget):
         if row < 0:
             return
         cam_id = self._table.item(row, 7).text()
-        name = self._table.item(row, 0).text()
-        reply = QMessageBox.question(
-            self, "Delete Camera",
-            f"Delete camera '{name}'?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            try:
-                self.db.delete_camera(cam_id)
-                self.refresh()
-            except Exception as e:
-                QMessageBox.warning(self, "Error", str(e))
+        camera = next((c for c in self._cameras if c["id"] == cam_id), None)
+        self._delete_camera(camera)

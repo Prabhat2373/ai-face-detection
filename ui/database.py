@@ -222,4 +222,10 @@ class Database:
         return self._store.list_alarm_events(limit)
 
     def clear_sync_events(self) -> None:
+        try:
+            from ui.backend_client import BackendClient
+            client = BackendClient(timeout=2.0)
+            client.clear_alarms()
+        except Exception:
+            pass
         self._store.clear_sync_events()

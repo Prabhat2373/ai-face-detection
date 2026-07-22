@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (
     QToolButton, QMenu, QAbstractItemView, QStyledItemDelegate,
     QFileDialog, QGridLayout,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QPixmap
 from typing import Optional
 
-from ..widgets import SectionHeader, EmptyState
+from ..widgets import SectionHeader, EmptyState, get_edit_icon, get_delete_icon
 from ..database import Database
 from ..backend_client import BackendClient
 
@@ -422,41 +422,45 @@ class EmployeesPage(QWidget):
         layout.setContentsMargins(10, 0, 10, 0)
         layout.setSpacing(14)
 
-        edit_btn = QPushButton("Edit")
+        edit_btn = QPushButton()
+        edit_btn.setIcon(get_edit_icon("#ffffff", 16))
+        edit_btn.setIconSize(QSize(16, 16))
+        edit_btn.setToolTip("Edit Employee")
         edit_btn.setCursor(Qt.PointingHandCursor)
         edit_btn.setStyleSheet("""
             QPushButton {
-                background: #ffffff;
-                color: #1a73e8;
-                border: 1px solid #cfe0ff;
+                background: #1a73e8;
+                color: #ffffff;
+                border: none;
                 border-radius: 6px;
-                padding: 5px 16px;
-                font-weight: 700;
-                min-width: 66px;
+                padding: 6px 10px;
+                min-width: 32px;
+                min-height: 28px;
             }
             QPushButton:hover {
-                background: #eef4ff;
-                border-color: #1a73e8;
+                background: #1557b0;
             }
         """)
         edit_btn.clicked.connect(lambda _checked=False, emp=employee: self._edit_employee(emp))
         layout.addWidget(edit_btn)
 
-        delete_btn = QPushButton("Delete")
+        delete_btn = QPushButton()
+        delete_btn.setIcon(get_delete_icon("#ffffff", 16))
+        delete_btn.setIconSize(QSize(16, 16))
+        delete_btn.setToolTip("Delete Employee")
         delete_btn.setCursor(Qt.PointingHandCursor)
         delete_btn.setStyleSheet("""
             QPushButton {
-                background: #ffffff;
-                color: #dc2626;
-                border: 1px solid rgba(220, 38, 38, 0.28);
+                background: #ef4444;
+                color: #ffffff;
+                border: none;
                 border-radius: 6px;
-                padding: 5px 16px;
-                font-weight: 700;
-                min-width: 66px;
+                padding: 6px 10px;
+                min-width: 32px;
+                min-height: 28px;
             }
             QPushButton:hover {
-                background: rgba(220, 38, 38, 0.08);
-                border-color: #dc2626;
+                background: #dc2626;
             }
         """)
         delete_btn.clicked.connect(lambda _checked=False, emp=employee: self._delete_employee(emp))

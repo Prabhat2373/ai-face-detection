@@ -60,6 +60,16 @@ class BackendClient:
         except Exception:
             return []
 
+    def clear_alarms(self) -> dict:
+        """Clear unknown person alarm events on backend API."""
+        try:
+            return self._json("DELETE", "/alarms")
+        except Exception:
+            try:
+                return self._json("POST", "/alarms/clear")
+            except Exception:
+                return {"ok": False}
+
     def save_employee(self, payload: dict) -> dict:
         """Create or update an employee on the backend API."""
         emp_id = payload.get("id")
