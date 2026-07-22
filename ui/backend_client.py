@@ -48,6 +48,18 @@ class BackendClient:
         except Exception:
             return []
 
+    def get_alarms(self, limit: int = 100) -> list[dict]:
+        """Fetch unknown person alarm events directly from backend API."""
+        try:
+            res = self._json("GET", f"/alarms?limit={limit}")
+            if isinstance(res, dict) and "alarms" in res:
+                return res["alarms"]
+            if isinstance(res, list):
+                return res
+            return []
+        except Exception:
+            return []
+
     def save_employee(self, payload: dict) -> dict:
         """Create or update an employee on the backend API."""
         emp_id = payload.get("id")

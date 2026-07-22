@@ -209,5 +209,17 @@ class Database:
     def list_all_sync_events(self, limit: int = 20) -> list[dict]:
         return self._store.list_all_sync_events(limit)
 
+    def list_alarm_events(self, limit: int = 100) -> list[dict]:
+        # Try fetching live unknown face alarms directly from backend API first
+        try:
+            from ui.backend_client import BackendClient
+            client = BackendClient(timeout=2.0)
+            live_alarms = client.get_alarms(limit)
+            if live_alarms:
+                return live_alarms
+        except Exception:
+            pass
+        return self._store.list_alarm_events(limit)
+
     def clear_sync_events(self) -> None:
         self._store.clear_sync_events()

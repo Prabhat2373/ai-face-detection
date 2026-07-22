@@ -1,22 +1,23 @@
-"""Alarms page showing system notifications, detection events, and error logs."""
+"""Alarms page showing unknown face security alerts and detection snapshots."""
 
+import os
 import json
+from datetime import datetime, timezone
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QComboBox, QMessageBox,
+    QScrollArea, QComboBox, QMessageBox, QDialog,
 )
 from PySide6.QtCore import QSize, Qt, QTimer
-from datetime import datetime, timezone
+from PySide6.QtGui import QColor, QBrush, QPixmap
 
-from ..widgets import SectionHeader, Pill
+from ..widgets import StatCard
 from ..database import Database
-from PySide6.QtGui import QColor, QPixmap
 
 
 class AlarmsPage(QWidget):
-    """System alarms, notifications, and detection events page."""
+    """Unknown person security alarms and detection snapshots page."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,7 +26,7 @@ class AlarmsPage(QWidget):
         self.refresh()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
-        self._timer.start(10000)
+        self._timer.start(3000)
 
     def _build_ui(self):
         scroll = QScrollArea()
@@ -46,30 +47,33 @@ class AlarmsPage(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
-        title = QLabel("Alarms & Events")
+        title = QLabel("Unknown Person Alarms")
         title.setProperty("class", "page-title")
-        desc = QLabel("System notifications, detection events, and error logs")
+        desc = QLabel("Real-time security alerts triggered when an unrecognized face is detected")
         desc.setProperty("class", "page-desc")
         text_col.addWidget(title)
         text_col.addWidget(desc)
         hdr_layout.addLayout(text_col)
         hdr_layout.addStretch()
 
-        # Filter controls
+        # Filter & Action controls
         controls = QHBoxLayout()
         controls.setSpacing(8)
+
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["All Events", "Detection", "Error", "System", "Sync"])
+        self._filter_combo.addItems(["All Unknown Alarms", "Today Only"])
+        self._filter_combo.setMinimumWidth(160)
         self._filter_combo.currentTextChanged.connect(self._apply_filter)
         controls.addWidget(QLabel("Filter:"))
         controls.addWidget(self._filter_combo)
 
-        self.clear_btn = QPushButton("Clear Events")
-        self.clear_btn.setProperty("class", "danger")
+        self.clear_btn = QPushButton("Clear Alarms")
+        self.clear_btn.setStyleSheet("QPushButton { background: #ef4444; color: #ffffff; font-weight: bold; border-radius: 6px; padding: 8px 16px; } QPushButton:hover { background: #dc2626; }")
         self.clear_btn.clicked.connect(self._clear_events)
         controls.addWidget(self.clear_btn)
 
         self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setStyleSheet("QPushButton { background: #ffffff; color: #111827; border: 1px solid #e5e7eb; font-weight: bold; border-radius: 6px; padding: 8px 16px; } QPushButton:hover { background: #eef4ff; border-color: #1a73e8; }")
         self.refresh_btn.clicked.connect(self.refresh)
         controls.addWidget(self.refresh_btn)
 
@@ -80,32 +84,34 @@ class AlarmsPage(QWidget):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
 
-        self._detection_card = self._mini_stat("Recent Detections", "0", "#86efac")
-        self._error_card = self._mini_stat("Errors", "0", "#fb7185")
-        self._sync_card = self._mini_stat("Sync Events", "0", "#bfdbfe")
+        self._total_alarms_card = self._mini_stat("Total Unknown Alarms", "0", "#ef4444")
+        self._today_alarms_card = self._mini_stat("Active Today", "0", "#f97316")
 
-        for card in [self._detection_card, self._error_card, self._sync_card]:
-            stats_row.addWidget(card)
+        stats_row.addWidget(self._total_alarms_card)
+        stats_row.addWidget(self._today_alarms_card)
+        stats_row.addStretch()
         layout.addLayout(stats_row)
 
-        # Events table
+        # Unknown Alarms Table
         self._table = QTableWidget()
-        self._table.setColumnCount(6)
+        self._table.setColumnCount(7)
         self._table.setHorizontalHeaderLabels([
-            "Snapshot", "Type", "Timestamp", "Details", "Status", "Retries"
+            "#", "Snapshot", "Camera", "Timestamp", "Confidence", "Status", "Action"
         ])
-        self._table.horizontalHeader().setStretchLastSection(True)
         header_view = self._table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(3, QHeaderView.Stretch)
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # #
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Snapshot
+        header_view.setSectionResizeMode(2, QHeaderView.Stretch)           # Camera
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Timestamp
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Confidence
+        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Status
+        header_view.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Action
+
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
+        self._table.setMinimumHeight(380)
         layout.addWidget(self._table)
 
         scroll.setWidget(self._container)
@@ -117,6 +123,7 @@ class AlarmsPage(QWidget):
         card = QFrame()
         card.setProperty("class", "stat-card")
         card.setMinimumHeight(80)
+        card.setMinimumWidth(220)
         clayout = QVBoxLayout(card)
         clayout.setContentsMargins(16, 12, 16, 12)
         clayout.setSpacing(4)
@@ -130,135 +137,169 @@ class AlarmsPage(QWidget):
         clayout.addWidget(val)
         return card
 
-    def _generate_events(self):
-        """Generate simulated events from database state for the UI demonstration."""
+    def _fetch_unknown_alarms(self):
+        """Fetch unknown person alarm events from the database."""
         events = []
+        sync_rows = self.db.list_alarm_events(100)
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        # Detection events from attendance records
-        for rec in self.db.list_attendance()[:10]:
-            events.append({
-                "type": "Detection",
-                "timestamp": rec.get("last_appearance", ""),
-                "details": f"Face matched: {rec.get('label', 'Unknown')} (confidence: {rec.get('max_confidence', 0):.2f})",
-                "status": "Success",
-                "retries": 0,
-            })
+        for row in sync_rows:
+            event_type = row.get("event_type", "")
+            if event_type != "alarm.triggered":
+                continue
 
-        # Sync events from store (no raw SQL in UI)
-        for row in self.db.list_all_sync_events(20):
             payload_text = row.get("payload", "{}")
             try:
                 payload = json.loads(payload_text)
             except Exception:
                 payload = {}
-            event_type = row.get("event_type", "unknown")
+
             snapshot = payload.get("snapshot") or {}
             faces = payload.get("faces") or []
-            best_face = max(faces, key=lambda face: float(face.get("confidence") or 0), default={})
-            confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0)
-            camera = payload.get("cameraName") or payload.get("cameraId") or payload.get("cameraRole") or "-"
-            details = f"[{event_type}] {payload_text}"
-            if event_type == "alarm.triggered":
-                details = f"Unknown person detected · Camera {camera}"
+            best_face = max(faces, key=lambda f: float(f.get("confidence") or 0.0), default={})
+            confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0.0)
+            camera = payload.get("cameraName") or payload.get("cameraId") or payload.get("cameraRole") or "Front Gate"
+            snapshot_path = snapshot.get("path")
+            ts = row.get("created_at") or payload.get("timestamp") or ""
+
+            # Check if today
+            is_today = False
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    is_today = dt.astimezone().strftime("%Y-%m-%d") == today_str
+                except Exception:
+                    is_today = ts[:10] == today_str
+
             events.append({
-                "type": "Alarm" if event_type == "alarm.triggered" else "Sync",
-                "timestamp": row.get("created_at", ""),
-                "details": details[:180],
-                "status": "Active" if event_type == "alarm.triggered" else ("Synced" if row.get("synced_at") else "Pending"),
-                "retries": row.get("retry_count", 0),
-                "snapshot_path": snapshot.get("path"),
+                "id": row.get("id"),
+                "camera": camera,
+                "timestamp": ts,
+                "is_today": is_today,
                 "confidence": confidence,
+                "snapshot_path": snapshot_path,
+                "status": "Triggered",
             })
 
-        # Error simulation from cameras with issues
-        for cam in self.db.list_cameras():
-            if not cam.get("enabled") and cam.get("name"):
-                events.append({
-                    "type": "System",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "details": f"Camera '{cam.get('name')}' is disabled",
-                    "status": "Warning",
-                    "retries": 0,
-                })
-
-        events.sort(key=lambda e: e["timestamp"], reverse=True)
+        events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
         return events
 
     def refresh(self):
-        self._events = self._generate_events()
+        self._events = self._fetch_unknown_alarms()
         self._apply_filter()
 
         # Update stats
-        detections = sum(1 for e in self._events if e["type"] == "Detection")
-        errors = sum(1 for e in self._events if e["status"] == "Error" or e["status"] == "Warning")
-        syncs = sum(1 for e in self._events if e["type"] == "Sync")
+        total_alarms = len(self._events)
+        today_alarms = sum(1 for e in self._events if e.get("is_today"))
 
-        self._detection_card.layout().itemAt(1).widget().setText(str(detections))
-        self._error_card.layout().itemAt(1).widget().setText(str(errors))
-        self._sync_card.layout().itemAt(1).widget().setText(str(syncs))
+        self._total_alarms_card.layout().itemAt(1).widget().setText(str(total_alarms))
+        self._today_alarms_card.layout().itemAt(1).widget().setText(str(today_alarms))
 
     def _apply_filter(self):
-        if not hasattr(self, '_events'):
+        if not hasattr(self, "_events"):
             return
         filter_text = self._filter_combo.currentText()
-        if filter_text == "All Events":
-            filtered = self._events
+        if filter_text == "Today Only":
+            filtered = [e for e in self._events if e.get("is_today")]
         else:
-            event_type = filter_text.replace(" Events", "")
-            filtered = [e for e in self._events if e["type"] == event_type]
+            filtered = self._events
 
         self._populate_table(filtered)
 
     def _populate_table(self, events):
         self._table.setRowCount(len(events))
-        self._table.setIconSize(QSize(72, 46))
-        self._table.verticalHeader().setDefaultSectionSize(58)
-        for row_idx, evt in enumerate(events):
-            snapshot_label = QLabel()
-            snapshot_label.setAlignment(Qt.AlignCenter)
-            snapshot_path = evt.get("snapshot_path")
-            if snapshot_path:
-                pixmap = QPixmap(str(snapshot_path))
-                if not pixmap.isNull():
-                    snapshot_label.setPixmap(pixmap.scaled(72, 46, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._table.verticalHeader().setDefaultSectionSize(54)
+
+        for idx, evt in enumerate(events, start=1):
+            row_idx = idx - 1
+
+            # Index
+            item_idx = QTableWidgetItem(str(idx))
+            item_idx.setTextAlignment(Qt.AlignCenter)
+            self._table.setItem(row_idx, 0, item_idx)
+
+            # Snapshot thumbnail
+            snap_path = evt.get("snapshot_path")
+            if snap_path and os.path.exists(snap_path):
+                lbl_snap = QLabel()
+                pix = QPixmap(snap_path)
+                if not pix.isNull():
+                    pix = pix.scaled(44, 44, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    lbl_snap.setPixmap(pix)
+                    lbl_snap.setCursor(Qt.PointingHandCursor)
+                    lbl_snap.setToolTip("Click to view unknown snapshot")
+                    lbl_snap.mousePressEvent = lambda event, path=snap_path: self._show_snapshot_dialog(path)
+                    self._table.setCellWidget(row_idx, 1, lbl_snap)
                 else:
-                    snapshot_label.setText("No image")
+                    self._table.setItem(row_idx, 1, QTableWidgetItem("-"))
             else:
-                snapshot_label.setText("-")
-            self._table.setCellWidget(row_idx, 0, snapshot_label)
+                self._table.setItem(row_idx, 1, QTableWidgetItem("-"))
 
-            self._table.setItem(row_idx, 1, QTableWidgetItem(evt["type"]))
+            # Camera
+            self._table.setItem(row_idx, 2, QTableWidgetItem(str(evt.get("camera") or "-")))
 
+            # Timestamp
             ts = evt.get("timestamp", "")
+            formatted_ts = "-"
             if ts:
                 try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    ts = dt.strftime("%b %d, %Y  %H:%M:%S")
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    formatted_ts = dt.astimezone().strftime("%d %b %Y %I:%M:%S %p")
                 except Exception:
-                    pass
-            self._table.setItem(row_idx, 2, QTableWidgetItem(ts))
-            self._table.setItem(row_idx, 3, QTableWidgetItem(evt.get("details", "")))
+                    formatted_ts = str(ts)
+            self._table.setItem(row_idx, 3, QTableWidgetItem(formatted_ts))
 
-            status = evt.get("status", "")
-            status_item = QTableWidgetItem(status)
-            if status in ("Success", "Synced"):
-                status_item.setForeground(Qt.green)
-            elif status in ("Error", "Active"):
-                status_item.setForeground(Qt.red)
-            elif status == "Warning":
-                status_item.setForeground(QColor("#fbbf24"))
+            # Confidence
+            conf = evt.get("confidence", 0.0)
+            val = conf * 100.0 if conf <= 1.0 else conf
+            conf_text = f"{val:.1f}%" if val > 0 else "-"
+            item_conf = QTableWidgetItem(conf_text)
+            item_conf.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self._table.setItem(row_idx, 4, item_conf)
+
+            # Status (Red Triggered Badge)
+            item_status = QTableWidgetItem("Triggered")
+            item_status.setBackground(QBrush(QColor(254, 226, 226)))
+            item_status.setForeground(QBrush(QColor(220, 38, 38)))
+            self._table.setItem(row_idx, 5, item_status)
+
+            # Action button
+            if snap_path and os.path.exists(snap_path):
+                btn_view = QPushButton("View")
+                btn_view.setStyleSheet("QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border-radius: 4px; padding: 4px 12px; } QPushButton:hover { background: #1765cc; }")
+                btn_view.clicked.connect(lambda _, path=snap_path: self._show_snapshot_dialog(path))
+                self._table.setCellWidget(row_idx, 6, btn_view)
             else:
-                status_item.setForeground(QColor("#9badc8"))
-            self._table.setItem(row_idx, 4, status_item)
-            retry_text = str(evt.get("retries", 0))
-            if evt.get("confidence"):
-                retry_text = f"{float(evt['confidence']) * 100:.1f}%"
-            self._table.setItem(row_idx, 5, QTableWidgetItem(retry_text))
+                self._table.setItem(row_idx, 6, QTableWidgetItem("-"))
+
+    def _show_snapshot_dialog(self, path: str):
+        """Display unknown person snapshot modal dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Unknown Person Detection Snapshot")
+        dialog.setMinimumSize(640, 480)
+        d_layout = QVBoxLayout(dialog)
+
+        title = QLabel("⚠️ Unknown Person Alarm Snapshot")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #dc2626; margin-bottom: 8px;")
+        d_layout.addWidget(title, alignment=Qt.AlignCenter)
+
+        img_lbl = QLabel()
+        pix = QPixmap(path)
+        if not pix.isNull():
+            img_lbl.setPixmap(pix.scaled(720, 540, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        img_lbl.setAlignment(Qt.AlignCenter)
+        d_layout.addWidget(img_lbl)
+
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet("QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; padding: 8px 20px; border-radius: 6px; }")
+        btn_close.clicked.connect(dialog.accept)
+        d_layout.addWidget(btn_close, alignment=Qt.AlignCenter)
+        dialog.exec()
 
     def _clear_events(self):
         reply = QMessageBox.question(
-            self, "Clear Events",
-            "Clear all sync events from the database?",
+            self, "Clear Alarms",
+            "Are you sure you want to clear all unknown person alarms?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:

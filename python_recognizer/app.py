@@ -356,6 +356,8 @@ class FaceEngine:
             self._last_detection = snapshot
         self._update_camera_alarm_state(camera_key, known_faces, unknown_faces)
         should_alarm = self._should_alarm_camera(camera_key, unknown_faces)
+        camera_record = self.store.get_camera(camera_id, tenant) if camera_id else None
+        camera_name = str(camera_record.get("name") or "") if camera_record else None
         if self.alarm_enabled and unknown_faces:
             if should_alarm:
                 self._trigger_alarm(
@@ -365,9 +367,8 @@ class FaceEngine:
                     "unknown_person",
                     unknown_faces,
                     snapshot,
+                    camera_name,
                 )
-        camera_record = self.store.get_camera(camera_id, tenant) if camera_id else None
-        camera_name = str(camera_record.get("name") or "") if camera_record else None
         effective_department_id = camera_department_id or (str(camera_record.get("department_id") or "") if camera_record else "")
         department_record = self.store.get_department(effective_department_id, tenant) if effective_department_id else None
         department_name = str(department_record.get("name") or "") if department_record else None
@@ -1046,6 +1047,7 @@ class FaceEngine:
         reason: str,
         faces: list[dict[str, Any]],
         snapshot: dict[str, Any] | None,
+        camera_name: str | None = None,
     ) -> None:
         now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
         camera_key = camera_id or camera_role or "general"
@@ -1058,6 +1060,7 @@ class FaceEngine:
             "reason": reason,
             "cameraRole": camera_role,
             "cameraId": camera_id,
+            "cameraName": camera_name,
             "timestamp": iso_now(),
             "faces": faces,
             "snapshot": snapshot,
@@ -1546,6 +1549,11 @@ async def clear_faces(x_tenant_id: str | None = Header(default=None)) -> dict[st
 @app.get("/attendance")
 async def attendance(x_tenant_id: str | None = Header(default=None)) -> dict[str, Any]:
     return {"attendance": await asyncio.to_thread(engine.list_attendance, x_tenant_id)}
+
+
+@app.get("/alarms")
+async def alarms(limit: int = 100) -> dict[str, Any]:
+    return {"alarms": await asyncio.to_thread(engine.store.list_alarm_events, limit)}
 
 
 @app.get("/sync/status")

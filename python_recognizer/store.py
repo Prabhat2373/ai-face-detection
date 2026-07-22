@@ -857,6 +857,15 @@ class SQLiteStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def list_alarm_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent unknown person alarm events for the alarms page."""
+        with self._lock, self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sync_events WHERE event_type = 'alarm.triggered' ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def mark_sync_events_synced(self, ids: list[int]) -> None:
         if not ids:
             return
