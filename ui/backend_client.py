@@ -35,8 +35,28 @@ class BackendClient:
     def stop(self) -> dict:
         return self._json("POST", "/stop", {})
 
-    def upload_employee_photos(self, employee_id: str, photos_b64: list[str]) -> dict:
-        return self._json("POST", f"/employees/{parse.quote(employee_id, safe='')}/photos", {"photos": photos_b64})
+    def save_employee(self, payload: dict) -> dict:
+        """Create or update an employee on the backend API."""
+        emp_id = payload.get("id")
+        if emp_id:
+            encoded_id = parse.quote(str(emp_id), safe="")
+            return self._json("PUT", f"/employees/{encoded_id}", payload)
+        return self._json("POST", "/employees", payload)
+
+    def upload_employee_photos(self, employee_id: str, photos_b64: list[str], timeout: float = 60.0) -> dict:
+        """Upload employee photos and register their face embeddings.
+
+        The trailing-slash retry keeps this compatible with backend instances
+        configured to redirect or expose the slash-normalized route.
+        """
+        encoded_id = parse.quote(employee_id, safe="")
+        payload = {"photos": photos_b64}
+        try:
+            return self._json("POST", f"/employees/{encoded_id}/photos", payload, timeout=timeout)
+        except urllib_error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            return self._json("POST", f"/employees/{encoded_id}/photos/", payload, timeout=timeout)
 
     def frame(self, camera_id: str | None = None, camera_role: str | None = None) -> bytes | None:
         query = {}
@@ -51,12 +71,24 @@ class BackendClient:
         except (urllib_error.URLError, TimeoutError):
             return None
 
-    def _json(self, method: str, path: str, payload: dict | None = None) -> dict:
+    def _json(self, method: str, path: str, payload: dict | None = None, timeout: float | None = None) -> dict:
         data = None
         headers = {"Accept": "application/json"}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
-        with request.urlopen(req, timeout=self.timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        req_timeout = timeout if timeout is not None else self.timeout
+        try:
+            with request.urlopen(req, timeout=req_timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib_error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8")
+                err_json = json.loads(body)
+                detail = err_json.get("detail") or err_json.get("message")
+                if detail:
+                    raise RuntimeError(detail) from exc
+            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+                pass
+            raise

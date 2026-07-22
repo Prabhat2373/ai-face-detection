@@ -200,6 +200,8 @@ class EmployeesPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.db = Database.get()
+        # Used to upload employee face photos after the employee record is saved.
+        self.backend = BackendClient()
         self._build_ui()
         self.refresh()
 
@@ -359,18 +361,40 @@ class EmployeesPage(QWidget):
 
     def _persist_employee(self, data: dict):
         photos = data.pop("photos", [])
-        if not photos:
+        if not photos and not data.get("id"):
             raise ValueError("Please select at least one employee photo.")
 
         saved = self.db.save_employee(data)
         employee_id = saved.get("id") or data.get("id")
+
+        # Ensure employee is registered with backend service before uploading photos
+        try:
+            dept_id = data.get("department_id")
+            backend_payload = {
+                "id": employee_id,
+                "name": saved.get("name", data.get("name", "")),
+                "employeeCode": saved.get("employee_code", data.get("employee_code", "")),
+                "role": saved.get("role", data.get("role", "")),
+                "active": bool(saved.get("active", data.get("active", True))),
+                "departmentIds": [dept_id] if dept_id else (saved.get("departments") or []),
+            }
+            self.backend.save_employee(backend_payload)
+        except Exception:
+            pass
+
         if photos and employee_id:
             import base64
             payload = []
             for path in photos:
                 with open(path, "rb") as f:
                     payload.append(base64.b64encode(f.read()).decode("utf-8"))
-            self.backend.upload_employee_photos(employee_id, payload)
+            try:
+                self.backend.upload_employee_photos(employee_id, payload)
+            except Exception as exc:
+                err_detail = str(exc) or "Face photos could not be registered."
+                raise RuntimeError(
+                    f"Employee was saved, but face photos could not be registered: {err_detail}"
+                ) from exc
         return saved
 
     def _add_employee(self):

@@ -26,10 +26,7 @@ from ui.backend_process import writable_app_dir  # noqa: E402
 _DEFAULT_TENANT = "default"
 
 # Path to the backend's database
-if getattr(sys, "frozen", False):
-    _BACKEND_DB = str(writable_app_dir() / "data" / "app.db")
-else:
-    _BACKEND_DB = os.path.join(_PROJECT_ROOT, "python_recognizer", "data", "app.db")
+_BACKEND_DB = os.getenv("PYTHON_DB_PATH") or str(writable_app_dir() / "data" / "app.db")
 
 
 class Database:
