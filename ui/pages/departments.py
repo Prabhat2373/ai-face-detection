@@ -30,9 +30,17 @@ class DepartmentDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
+        self.setStyleSheet("""
+            QDialog { background: #f4f6fb; color: #111827; }
+            QLabel { color: #111827; }
+            QLineEdit, QTextEdit { background: #ffffff; color: #111827; border: 1px solid #e5e7eb; border-radius: 7px; padding: 10px 13px; }
+            QLineEdit:focus, QTextEdit:focus { border-color: #1a73e8; }
+            QDialogButtonBox QPushButton { background: #ffffff; color: #111827; border: 1px solid #e5e7eb; border-radius: 7px; padding: 9px 16px; font-weight: 700; }
+            QDialogButtonBox QPushButton:hover { border-color: #1a73e8; background: #eef4ff; }
+        """)
 
         title = QLabel("Edit Department" if self.department else "New Department")
-        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #edf3ff;")
+        title.setProperty("class", "page-title")
         layout.addWidget(title)
 
         form = QFormLayout()
@@ -117,6 +125,7 @@ class DepartmentsPage(QWidget):
 
         self.add_btn = QPushButton("+ Add Department")
         self.add_btn.setProperty("class", "primary")
+        self.add_btn.setStyleSheet("background: #1a73e8; color: #ffffff; border: 1px solid #1a73e8; border-radius: 7px; padding: 9px 16px; font-weight: 700;")
         self.add_btn.clicked.connect(self._add_department)
         actions.addWidget(self.add_btn)
 
@@ -129,9 +138,9 @@ class DepartmentsPage(QWidget):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(5)
+        self._table.setColumnCount(6)
         self._table.setHorizontalHeaderLabels([
-            "Name", "Description", "Employees", "Created", "ID"
+            "Name", "Description", "Employees", "Created", "Action", "ID"
         ])
         self._table.horizontalHeader().setStretchLastSection(False)
         header_view = self._table.horizontalHeader()
@@ -139,6 +148,7 @@ class DepartmentsPage(QWidget):
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -146,10 +156,8 @@ class DepartmentsPage(QWidget):
             QTableWidget { alternate-background-color: rgba(155, 173, 200, 0.03); }
         """)
         self._table.verticalHeader().setVisible(False)
-        self._table.setColumnHidden(4, True)  # Hide ID
-        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._table.customContextMenuRequested.connect(self._context_menu)
-        self._table.doubleClicked.connect(self._edit_selected)
+        self._table.verticalHeader().setDefaultSectionSize(52)
+        self._table.setColumnHidden(5, True)  # Hide ID
         layout.addWidget(self._table)
 
         # Footer
@@ -187,7 +195,8 @@ class DepartmentsPage(QWidget):
                 except Exception:
                     pass
             self._table.setItem(row_idx, 3, QTableWidgetItem(created))
-            self._table.setItem(row_idx, 4, QTableWidgetItem(dept.get("id", "")))
+            self._table.setCellWidget(row_idx, 4, self._build_action_widget(dept))
+            self._table.setItem(row_idx, 5, QTableWidgetItem(dept.get("id", "")))
 
         self._count_label.setText(f"{len(departments)} departments")
 
@@ -212,21 +221,44 @@ class DepartmentsPage(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
 
-    def _edit_selected(self):
-        row = self._table.currentRow()
-        if row < 0:
-            return
-        dept_id = self._table.item(row, 4).text()
-        dept = next((d for d in self._departments if d["id"] == dept_id), None)
-        if not dept:
-            return
-        dialog = DepartmentDialog(dept, self)
+    def _department_by_row(self, row: int) -> Optional[dict]:
+        if row < 0 or row >= self._table.rowCount():
+            return None
+        item = self._table.item(row, 5)
+        dept_id = item.text() if item else ""
+        return next((d for d in getattr(self, "_departments", []) if d["id"] == dept_id), None)
+
+    def _build_action_widget(self, department: dict) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(12)
+
+        edit_btn = QPushButton("Edit")
+        edit_btn.setStyleSheet("QPushButton { background:#fff; color:#1a73e8; border:1px solid #cfe0ff; border-radius:6px; padding:5px 14px; font-weight:700; min-width:58px; } QPushButton:hover { background:#eef4ff; border-color:#1a73e8; }")
+        edit_btn.clicked.connect(lambda _checked=False, dept=department: self._edit_department(dept))
+        layout.addWidget(edit_btn)
+
+        delete_btn = QPushButton("Delete")
+        delete_btn.setStyleSheet("QPushButton { background:#fff; color:#dc2626; border:1px solid rgba(220,38,38,.28); border-radius:6px; padding:5px 14px; font-weight:700; min-width:58px; } QPushButton:hover { background:rgba(220,38,38,.08); border-color:#dc2626; }")
+        delete_btn.clicked.connect(lambda _checked=False, dept=department: self._delete_department(dept))
+        layout.addWidget(delete_btn)
+        layout.addStretch()
+        return widget
+
+    def _edit_department(self, department: dict):
+        dialog = DepartmentDialog(department, self)
         if dialog.exec():
             try:
                 self.db.save_department(dialog.get_data())
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
+
+    def _edit_selected(self):
+        department = self._department_by_row(self._table.currentRow())
+        if department:
+            self._edit_department(department)
 
     def _context_menu(self, pos):
         from PySide6.QtWidgets import QMenu
@@ -256,20 +288,21 @@ class DepartmentsPage(QWidget):
         elif action == delete_action:
             self._delete_selected()
 
-    def _delete_selected(self):
-        row = self._table.currentRow()
-        if row < 0:
-            return
-        dept_id = self._table.item(row, 4).text()
-        name = self._table.item(row, 0).text()
-        reply = QMessageBox.question(
-            self, "Delete Department",
-            f"Delete department '{name}'?\nEmployees in this department will be unassigned.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
+    def _delete_department(self, department: dict):
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete Department")
+        box.setText(f"Delete department '{department.get('name', '')}'?\nEmployees in this department will be unassigned.")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        box.setStyleSheet("QMessageBox { background:#f4f6fb; color:#111827; } QMessageBox QLabel { color:#111827; } QMessageBox QPushButton { background:#fff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:8px 18px; min-width:72px; font-weight:700; } QMessageBox QPushButton:hover { background:#eef4ff; border-color:#1a73e8; }")
+        if box.exec() == QMessageBox.Yes:
             try:
-                self.db.delete_department(dept_id)
+                self.db.delete_department(department["id"])
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
+
+    def _delete_selected(self):
+        department = self._department_by_row(self._table.currentRow())
+        if department:
+            self._delete_department(department)

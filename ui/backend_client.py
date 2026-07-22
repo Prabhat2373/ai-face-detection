@@ -35,6 +35,9 @@ class BackendClient:
     def stop(self) -> dict:
         return self._json("POST", "/stop", {})
 
+    def upload_employee_photos(self, employee_id: str, photos_b64: list[str]) -> dict:
+        return self._json("POST", f"/employees/{parse.quote(employee_id, safe='')}/photos", {"photos": photos_b64})
+
     def frame(self, camera_id: str | None = None, camera_role: str | None = None) -> bytes | None:
         query = {}
         if camera_id:

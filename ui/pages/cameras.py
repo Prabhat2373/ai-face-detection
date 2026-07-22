@@ -31,8 +31,9 @@ class CameraDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
 
+        self.setStyleSheet("QDialog { background:#f4f6fb; color:#111827; } QLabel { color:#111827; } QLineEdit, QComboBox { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:10px 13px; } QDialogButtonBox QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QDialogButtonBox QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
         title = QLabel("Edit Camera" if self.camera else "New Camera")
-        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #edf3ff;")
+        title.setProperty("class", "page-title")
         layout.addWidget(title)
 
         form = QFormLayout()
@@ -143,6 +144,7 @@ class CamerasPage(QWidget):
 
         self.add_btn = QPushButton("+ Add Camera")
         self.add_btn.setProperty("class", "primary")
+        self.add_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:1px solid #1a73e8; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#1765cc; border-color:#1765cc; }")
         self.add_btn.clicked.connect(self._add_camera)
         actions.addWidget(self.add_btn)
 
@@ -173,6 +175,7 @@ class CamerasPage(QWidget):
             QTableWidget { alternate-background-color: rgba(155, 173, 200, 0.03); }
         """)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(52)
         self._table.setColumnHidden(7, True)  # Hide ID
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._context_menu)

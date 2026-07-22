@@ -158,11 +158,13 @@ class AttendancePage(QWidget):
         self.export_btn = QPushButton("Export")
         self.export_btn.setProperty("class", "primary")
         self.export_btn.setMinimumWidth(100)
+        self.export_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:1px solid #1a73e8; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#1765cc; border-color:#1765cc; }")
         self.export_btn.clicked.connect(self._export_csv)
         f_layout.addWidget(self.export_btn)
 
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.setMinimumWidth(100)
+        self.refresh_btn.setStyleSheet("QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
         self.refresh_btn.clicked.connect(self.refresh)
         f_layout.addWidget(self.refresh_btn)
 
