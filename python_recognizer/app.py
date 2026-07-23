@@ -797,6 +797,8 @@ class FaceEngine:
             "info",
             "-rtsp_transport",
             transport,
+            "-timeout",
+            "5000000",       # Socket I/O timeout (5 seconds in microseconds)
             "-thread_queue_size",
             "8",
             "-fflags",
