@@ -58,7 +58,22 @@ class Database:
     # ── Cameras ─────────────────────────────────────────────────────────
 
     def list_cameras(self) -> list[dict]:
-        return self._store.list_cameras(_DEFAULT_TENANT)
+        cams = self._store.list_cameras(_DEFAULT_TENANT)
+        conn = self._store.connection()
+        try:
+            for cam in cams:
+                dept_id = cam.get("department_id")
+                if dept_id:
+                    row = conn.execute(
+                        "SELECT name FROM departments WHERE id = ? AND tenant_id = ?",
+                        (dept_id, _DEFAULT_TENANT),
+                    ).fetchone()
+                    cam["department_name"] = row["name"] if row else ""
+                else:
+                    cam["department_name"] = ""
+        finally:
+            conn.close()
+        return cams
 
     def get_camera(self, camera_id: str) -> Optional[dict]:
         return self._store.get_camera(camera_id, _DEFAULT_TENANT)

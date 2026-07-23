@@ -310,6 +310,7 @@ class FaceEngine:
                 "cooldownMs": self.snapshot_cooldown_ms,
                 "recognitionBackend": "python",
                 "pythonRecognizerUrl": None,
+                "alarmEnabled": self.alarm_enabled,
             },
             "stream": {"running": bool(self._camera_workers), "lastState": None},
             "lastFaces": self._last_faces,

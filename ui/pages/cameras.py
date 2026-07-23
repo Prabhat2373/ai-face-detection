@@ -55,6 +55,14 @@ class CameraDialog(QDialog):
         self._role_combo.addItems(["general", "check_in", "check_out"])
         form.addRow("Role", self._role_combo)
 
+        # Department Field
+        self._dept_combo = QComboBox()
+        self._dept_combo.addItem("None (All Departments)", None)
+        self.db = Database.get()
+        for dept in self.db.list_departments():
+            self._dept_combo.addItem(dept.get("name", "Unknown"), dept.get("id"))
+        form.addRow("Department", self._dept_combo)
+
         self._username_input = QLineEdit()
         self._username_input.setPlaceholderText("Optional")
         form.addRow("Username", self._username_input)
@@ -83,6 +91,16 @@ class CameraDialog(QDialog):
         idx = self._role_combo.findText(camera.get("camera_role", "general"))
         if idx >= 0:
             self._role_combo.setCurrentIndex(idx)
+        
+        dept_id = camera.get("department_id")
+        dept_idx = 0
+        if dept_id:
+            for i in range(self._dept_combo.count()):
+                if self._dept_combo.itemData(i) == dept_id:
+                    dept_idx = i
+                    break
+        self._dept_combo.setCurrentIndex(dept_idx)
+
         self._username_input.setText(camera.get("rtsp_username") or "")
         self._password_input.setText(camera.get("rtsp_password") or "")
         self._enabled_check.setChecked(bool(camera.get("enabled")))
@@ -93,6 +111,7 @@ class CameraDialog(QDialog):
             "name": self._name_input.text().strip(),
             "rtsp_url": self._url_input.text().strip(),
             "camera_role": self._role_combo.currentText(),
+            "department_id": self._dept_combo.currentData(),
             "rtsp_username": self._username_input.text().strip() or None,
             "rtsp_password": self._password_input.text().strip() or None,
             "enabled": self._enabled_check.isChecked(),
@@ -160,19 +179,19 @@ class CamerasPage(QWidget):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(8)
+        self._table.setColumnCount(9)
         self._table.setHorizontalHeaderLabels([
-            "Name", "RTSP URL", "Role", "Username",
+            "Name", "RTSP URL", "Role", "Department", "Username",
             "Status", "Updated", "Actions", "ID"
         ])
         self._table.horizontalHeader().setStretchLastSection(False)
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
-        for i in range(2, 6):
+        for i in range(2, 7):
             header_view.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(6, QHeaderView.Fixed)
-        self._table.setColumnWidth(6, 140)
+        header_view.setSectionResizeMode(7, QHeaderView.Fixed)
+        self._table.setColumnWidth(7, 140)
 
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -182,7 +201,7 @@ class CamerasPage(QWidget):
         """)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(54)
-        self._table.setColumnHidden(7, True)  # Hide ID
+        self._table.setColumnHidden(8, True)  # Hide ID
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._context_menu)
         self._table.doubleClicked.connect(self._edit_selected)
@@ -214,13 +233,16 @@ class CamerasPage(QWidget):
             self._table.setItem(row_idx, 1, QTableWidgetItem(cam.get("rtsp_url", "")))
             self._table.setItem(row_idx, 2, QTableWidgetItem(cam.get("camera_role", "general")))
 
+            dept_name = cam.get("department_name") or cam.get("department_id") or "-"
+            self._table.setItem(row_idx, 3, QTableWidgetItem(dept_name))
+
             uname = cam.get("rtsp_username") or "-"
-            self._table.setItem(row_idx, 3, QTableWidgetItem(uname))
+            self._table.setItem(row_idx, 4, QTableWidgetItem(uname))
 
             enabled = bool(cam.get("enabled"))
             status_item = QTableWidgetItem("Enabled" if enabled else "Disabled")
             status_item.setForeground(Qt.green if enabled else Qt.gray)
-            self._table.setItem(row_idx, 4, status_item)
+            self._table.setItem(row_idx, 5, status_item)
 
             updated = cam.get("updated_at") or cam.get("created_at") or ""
             if updated:
@@ -230,7 +252,7 @@ class CamerasPage(QWidget):
                     updated = dt.strftime("%b %d, %Y")
                 except Exception:
                     pass
-            self._table.setItem(row_idx, 5, QTableWidgetItem(updated))
+            self._table.setItem(row_idx, 6, QTableWidgetItem(updated))
 
             # Actions cell widget (Edit & Delete SVG icon buttons)
             action_widget = QWidget()
@@ -271,9 +293,9 @@ class CamerasPage(QWidget):
             )
             btn_delete.clicked.connect(lambda _, camera=cam: self._delete_camera(camera))
             action_layout.addWidget(btn_delete)
-            self._table.setCellWidget(row_idx, 6, action_widget)
+            self._table.setCellWidget(row_idx, 7, action_widget)
 
-            self._table.setItem(row_idx, 7, QTableWidgetItem(cam.get("id", "")))
+            self._table.setItem(row_idx, 8, QTableWidgetItem(cam.get("id", "")))
 
         self._count_label.setText(f"{len(cameras)} cameras")
 
@@ -331,7 +353,7 @@ class CamerasPage(QWidget):
         row = self._table.currentRow()
         if row < 0:
             return
-        cam_id = self._table.item(row, 7).text()
+        cam_id = self._table.item(row, 8).text()
         camera = next((c for c in self._cameras if c["id"] == cam_id), None)
         self._edit_camera(camera)
 
@@ -363,10 +385,10 @@ class CamerasPage(QWidget):
         elif action == delete_action:
             self._delete_selected()
 
-    def _delete_selected(self):
+    def _delete_selected(self) -> None:
         row = self._table.currentRow()
         if row < 0:
             return
-        cam_id = self._table.item(row, 7).text()
+        cam_id = self._table.item(row, 8).text()
         camera = next((c for c in self._cameras if c["id"] == cam_id), None)
         self._delete_camera(camera)

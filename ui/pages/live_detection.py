@@ -352,6 +352,11 @@ class LiveDetectionPage(QWidget):
 
     def _alert_for_unknown_faces(self, camera_statuses: list[dict]):
         now = int(time.time() * 1000)
+        # Don't ring alarm if disabled in configuration
+        alarm_enabled_env = os.getenv("ALARM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        if not alarm_enabled_env:
+            return
+
         for camera in camera_statuses:
             camera_id = str(camera.get("id") or "camera")
             faces = camera.get("lastFaces") or []

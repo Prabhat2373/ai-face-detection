@@ -681,6 +681,9 @@
   }
 
   async function triggerUnknownAlarm() {
+    if (latestStatus && latestStatus.config && latestStatus.config.alarmEnabled === false) {
+      return;
+    }
     const now = Date.now();
     if (now - lastAlarmAt < 5000) {
       return;
