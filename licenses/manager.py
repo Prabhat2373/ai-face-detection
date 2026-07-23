@@ -70,7 +70,7 @@ _PBKDF2_ITERS: int = 390000
 PUBLIC_KEY_PATH = Path(__file__).resolve().parent / "public_key.pem"
 
 # Allowed license types
-ALLOWED_LICENSE_TYPES = {"trial", "professional", "enterprise"}
+ALLOWED_LICENSE_TYPES = {"trial", "professional", "enterprise", "lifetime"}
 
 
 # ---------------------------------------------------------------------------
@@ -118,42 +118,66 @@ def _get_linux_machine_id() -> Optional[str]:
     return None
 
 
+def _get_macos_uuid() -> Optional[str]:
+    """Retrieve macOS Hardware UUID using ioreg."""
+    try:
+        import subprocess
+        output = subprocess.check_output(
+            ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+            stderr=subprocess.DEVNULL,
+            text=True
+        )
+        for line in output.splitlines():
+            if "IOPlatformUUID" in line:
+                parts = line.split("=")
+                if len(parts) >= 2:
+                    return parts[1].replace('"', '').strip()
+    except Exception:
+        pass
+    return None
+
+
+def _get_windows_uuid() -> Optional[str]:
+    """Retrieve Windows Machine GUID from registry."""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography")
+        val, _ = winreg.QueryValueEx(key, "MachineGuid")
+        return str(val).strip()
+    except Exception:
+        pass
+    return None
+
+
 def get_machine_fingerprint() -> str:
     """
-    Compute a stable machine fingerprint.
+    Compute an immutable, hardware-bound machine fingerprint.
 
-    The fingerprint is computed by collecting several platform identifiers
-    (node name, MAC via uuid.getnode(), platform-specific machine-id) and
-    hashing them with SHA-256. The result is returned as a hex string.
-
-    This value is intended to be stable for the same physical machine and is
-    safe to share with the vendor for license provisioning.
+    This uses non-volatile hardware identifiers (macOS System UUID, Windows MachineGuid,
+    Linux machine-id) instead of dynamic attributes like network interfaces or hostnames.
     """
     parts = []
 
-    try:
-        node = platform.node() or ""
-        parts.append(node)
-    except Exception:
-        parts.append("")
+    # 1. Platform-specific immutable hardware UUID
+    if sys.platform == "darwin":
+        mac_uuid = _get_macos_uuid()
+        if mac_uuid:
+            parts.append(mac_uuid)
+    elif sys.platform == "win32":
+        win_uuid = _get_windows_uuid()
+        if win_uuid:
+            parts.append(win_uuid)
+    elif sys.platform.startswith("linux"):
+        lin_uuid = _get_linux_machine_id()
+        if lin_uuid:
+            parts.append(lin_uuid)
 
-    try:
-        mac = uuid.getnode()
-        parts.append(str(mac))
-    except Exception:
-        parts.append("")
-
-    try:
-        if sys.platform.startswith("linux"):
-            mid = _get_linux_machine_id() or ""
-            parts.append(mid)
-    except Exception:
-        parts.append("")
-
-    try:
-        parts.append(socket.gethostname())
-    except Exception:
-        parts.append("")
+    # 2. Fallback to stable node if no hardware UUID is available
+    if not parts:
+        try:
+            parts.append(platform.processor() or platform.machine() or "")
+        except Exception:
+            pass
 
     raw = "||".join(parts)
     h = sha256(raw.encode("utf-8")).hexdigest()

@@ -97,7 +97,7 @@ class Sidebar(QFrame):
             ("", ["live"]),
             ("OVERVIEW", ["dashboard", "employees", "departments"]),
             ("MASTER", ["cameras", "attendance", "alarms"]),
-            ("SYSTEM", []),
+            # ("SYSTEM", []),
         ]
 
         # Map keys -> labels
@@ -163,13 +163,13 @@ class Sidebar(QFrame):
         footer_layout.setContentsMargins(20, 0, 20, 0)
         footer_layout.setSpacing(4)
 
-        self._status_indicator = QLabel("● Connected")
-        self._status_indicator.setProperty("class", "muted")
-        footer_layout.addWidget(self._status_indicator)
+        # self._status_indicator = QLabel("● Connected")
+        # self._status_indicator.setProperty("class", "muted")
+        # footer_layout.addWidget(self._status_indicator)
 
-        self._model_label = QLabel("● AI Model: Ready")
-        self._model_label.setProperty("class", "muted")
-        footer_layout.addWidget(self._model_label)
+        # self._model_label = QLabel("● AI Model: Ready")
+        # self._model_label.setProperty("class", "muted")
+        # footer_layout.addWidget(self._model_label)
 
         layout.addWidget(footer)
 
@@ -275,24 +275,26 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(status)
 
-        offline = QLabel("Offline Mode")
-        offline.setProperty("class", "muted")
-        layout.addWidget(offline)
+        # offline = QLabel("Offline Mode")
+        # offline.setProperty("class", "muted")
+        # layout.addWidget(offline)
 
-        model = QLabel("Model v2.1.4")
-        model.setStyleSheet(
-            "color: #1a73e8; font-weight: 800; padding: 8px 14px; "
-            "background: rgba(26,115,232,0.10); border-radius: 6px;"
-        )
-        layout.addWidget(model)
+        # model = QLabel("Model v2.1.4")
+        # model.setStyleSheet(
+        #     "color: #1a73e8; font-weight: 800; padding: 8px 14px; "
+        #     "background: rgba(26,115,232,0.10); border-radius: 6px;"
+        # )
+        # layout.addWidget(model)
 
         # Theme toggle intentionally hidden to enforce light-only styling
         self.theme_btn = QPushButton("Theme")
         self.theme_btn.setVisible(False)
         layout.addWidget(self.theme_btn)
 
-        # User details
-        user = QLabel("Admin User\nHead Office")
+        # User details (dynamic company name loaded from license metadata)
+        company_name = os.getenv("FACEAGENT_COMPANY_NAME", "").strip()
+        display_text = f"Admin User\n{company_name}" if company_name else "Admin User\nHead Office"
+        user = QLabel(display_text)
         user.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(user)
 

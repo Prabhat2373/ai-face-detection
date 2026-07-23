@@ -243,6 +243,12 @@ def set_license_env(env: dict, info: dict) -> None:
     if info.get("expires_at"):
         env.setdefault("FACEAGENT_LICENSE_EXPIRES_AT", info.get("expires_at"))
     env.setdefault("FACEAGENT_LICENSE_IS_LOCAL_TRIAL", str(bool(info.get("is_local_trial", False))))
+    
+    # Extract company name from raw license payload metadata
+    raw_payload = info.get("raw_payload") or {}
+    meta = raw_payload.get("meta") or {}
+    company_name = meta.get("company") or ""
+    env.setdefault("FACEAGENT_COMPANY_NAME", str(company_name))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

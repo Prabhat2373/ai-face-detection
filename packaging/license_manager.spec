@@ -17,8 +17,9 @@ Notes:
 
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parents[1]
-spec_dir = Path(__file__).resolve().parent
+# PyInstaller injects SPECPATH which contains the folder containing the spec file
+spec_dir = Path(SPECPATH).resolve()
+project_root = spec_dir.parent
 
 # Entry script for the License Manager app
 entry_script = project_root / "license_manager" / "main.py"

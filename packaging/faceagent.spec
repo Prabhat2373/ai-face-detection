@@ -27,7 +27,8 @@ from pathlib import Path
 block_cipher = None
 
 # Project layout
-SPEC_DIR = Path(__file__).resolve().parent
+# PyInstaller injects SPECPATH which contains the folder containing the spec file
+SPEC_DIR = Path(SPECPATH).resolve()
 PROJECT_ROOT = SPEC_DIR.parent
 
 # Entry script (the launcher that orchestrates backend + UI + license checks)
