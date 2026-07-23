@@ -1615,8 +1615,24 @@ async def clear_faces(x_tenant_id: str | None = Header(default=None)) -> dict[st
 
 
 @app.get("/attendance")
-async def attendance(x_tenant_id: str | None = Header(default=None)) -> dict[str, Any]:
-    return {"attendance": await asyncio.to_thread(engine.list_attendance, x_tenant_id)}
+async def attendance(date: str | None = None, x_tenant_id: str | None = Header(default=None)) -> dict[str, Any]:
+    records = await asyncio.to_thread(engine.list_attendance, x_tenant_id)
+    if date:
+        matched = []
+        for record in records:
+            rec_date = record.get("attendance_date")
+            if not rec_date and (record.get("last_appearance") or record.get("first_appearance")):
+                ts = str(record.get("last_appearance") or record.get("first_appearance"))
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    rec_date = dt.astimezone().strftime("%Y-%m-%d")
+                except Exception:
+                    rec_date = ts[:10]
+            if rec_date == date:
+                matched.append(record)
+        return {"attendance": matched}
+    return {"attendance": records}
 
 
 @app.get("/alarms")

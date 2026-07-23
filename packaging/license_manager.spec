@@ -22,7 +22,7 @@ spec_dir = Path(SPECPATH).resolve()
 project_root = spec_dir.parent
 
 # Entry script for the License Manager app
-entry_script = project_root / "license_manager" / "main.py"
+entry_script = project_root / "license_manager" / "ui" / "app_gui.py"
 
 # Data files to include (assets such as icons)
 datas = []
