@@ -1243,6 +1243,9 @@ class FaceEngine:
         )
 
     def _play_alarm_sound(self) -> None:
+        if not self.alarm_enabled:
+            return
+
         sound = self.alarm_sound_path
         if not sound.exists():
             logger.warning("Alarm sound file not found: %s", sound)

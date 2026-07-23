@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
 from ui.styles import build_stylesheet
 from ui.main_window import MainWindow
@@ -57,12 +58,17 @@ def activation_mode() -> int:
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("FaceAgent")
-    app.setApplicationDisplayName("FaceAgent Desktop - Activation")
-    app.setOrganizationName("FaceAgent")
+    app.setApplicationName("Otence Intelligence")
+    app.setApplicationDisplayName("Otence Intelligence - Activation")
+    app.setOrganizationName("Otence Intelligence")
 
     # Apply global stylesheet (optional); activation UI can use same theme
     app.setStyleSheet(build_stylesheet(os.getenv("FACEAGENT_THEME", "light")))
+
+    # Set application icon
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+    if os.path.exists(logo_path):
+        app.setWindowIcon(QIcon(logo_path))
 
     dialog = LicenseDialog()
     result = dialog.exec()
@@ -122,12 +128,17 @@ def main():
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("FaceAgent")
-    app.setApplicationDisplayName("FaceAgent Desktop")
-    app.setOrganizationName("FaceAgent")
+    app.setApplicationName("Otence Intelligence")
+    app.setApplicationDisplayName("Otence Intelligence")
+    app.setOrganizationName("Otence Intelligence")
 
     # Apply global stylesheet
     app.setStyleSheet(build_stylesheet(os.getenv("FACEAGENT_THEME", "light")))
+
+    # Set application icon
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+    if os.path.exists(logo_path):
+        app.setWindowIcon(QIcon(logo_path))
 
     # Create and show window
     window = MainWindow()

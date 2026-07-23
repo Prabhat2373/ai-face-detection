@@ -44,7 +44,7 @@ from .database import Database
 
 # Navigation metadata: (key, label, group)
 NAV_ITEMS = [
-    ("live", "Live Detection", "main"),
+    ("live", "Live", "main"),
     ("dashboard", "Dashboard", "overview"),
     ("employees", "Employees", "overview"),
     ("departments", "Departments", "overview"),
@@ -70,19 +70,42 @@ class Sidebar(QFrame):
         layout.setContentsMargins(0, 0, 0, 12)
         layout.setSpacing(0)
 
-        # Header / branding
+        # Header / branding (with logo and title)
         header = QWidget()
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(22, 20, 20, 16)
-        header_layout.setSpacing(2)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 20, 10, 16)
+        header_layout.setSpacing(10)
 
-        brand = QLabel("FaceGuard")
+        # Logo image
+        logo_label = QLabel()
+        logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+        if os.path.exists(logo_path):
+            from PySide6.QtGui import QPixmap
+            pixmap = QPixmap(logo_path)
+            logo_label.setPixmap(pixmap.scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            logo_label.setText("⚙️")
+            logo_label.setStyleSheet("font-size: 20px;")
+
+        # Text brand container
+        brand_text_container = QWidget()
+        brand_text_layout = QVBoxLayout(brand_text_container)
+        brand_text_layout.setContentsMargins(0, 0, 0, 0)
+        brand_text_layout.setSpacing(1)
+
+        brand = QLabel("Otence")
         brand.setObjectName("sidebarTitle")
-        header_layout.addWidget(brand)
+        brand.setStyleSheet("font-weight: 800; font-size: 16px; color: #111827;")
+        brand_text_layout.addWidget(brand)
 
-        subtitle = QLabel("ADMIN PANEL")
+        subtitle = QLabel("Intelligence")
         subtitle.setObjectName("sidebarSubtitle")
-        header_layout.addWidget(subtitle)
+        subtitle.setStyleSheet("font-size: 12px; font-weight: 700; color: #1a73e8; letter-spacing: 0.5px; text-transform: uppercase;")
+        brand_text_layout.addWidget(subtitle)
+
+        header_layout.addWidget(logo_label)
+        header_layout.addWidget(brand_text_container)
+        header_layout.addStretch()
 
         layout.addWidget(header)
 
@@ -190,7 +213,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FaceAgent - Face Detection System")
+        self.setWindowTitle("Otence Intelligence")
         self.setMinimumSize(1200, 720)
         self.resize(1440, 860)
 
@@ -262,7 +285,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         # Breadcrumb area
-        self._breadcrumb = QLabel("FaceGuard > Dashboard")
+        self._breadcrumb = QLabel("Otence Intelligence > Dashboard")
         self._breadcrumb.setProperty("class", "muted")
         layout.addWidget(self._breadcrumb)
         layout.addStretch()
@@ -339,7 +362,7 @@ class MainWindow(QMainWindow):
         # Switch page
         self.stack.setCurrentWidget(self._pages[page_key])
         current_label = next((label for key, label, _group in NAV_ITEMS if key == page_key), page_key.title())
-        self._breadcrumb.setText(f"FaceGuard > {current_label}")
+        self._breadcrumb.setText(f"Otence Intelligence > {current_label}")
 
         # Refresh page content if it exposes refresh()
         page = self._pages[page_key]
