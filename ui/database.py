@@ -29,11 +29,14 @@ def _resolve_backend_db() -> str:
     env_path = os.getenv("PYTHON_DB_PATH")
     if env_path:
         return env_path
+    app_db = writable_app_dir() / "data" / "app.db"
+    if app_db.exists():
+        return str(app_db)
     if not getattr(sys, "frozen", False):
         local_db = os.path.join(_PROJECT_ROOT, "python_recognizer", "data", "app.db")
         if os.path.exists(local_db):
             return local_db
-    return str(writable_app_dir() / "data" / "app.db")
+    return str(app_db)
 
 _BACKEND_DB = _resolve_backend_db()
 

@@ -654,12 +654,14 @@ class SQLiteStore:
                 """
                 SELECT f.label, e.employee_id, e.embedding, f.updated_at,
                        emp.name AS employee_name, emp.active AS employee_active,
-                       GROUP_CONCAT(ed.department_id) AS department_ids
+                       (
+                           SELECT GROUP_CONCAT(ed.department_id)
+                           FROM employee_departments ed
+                           WHERE ed.employee_id = e.employee_id
+                       ) AS department_ids
                 FROM known_faces f
                 JOIN face_embeddings e ON e.label = f.label
                 LEFT JOIN employees emp ON emp.id = e.employee_id
-                LEFT JOIN employee_departments ed ON ed.employee_id = emp.id
-                GROUP BY e.id
                 ORDER BY f.label COLLATE NOCASE, e.id ASC
                 """
             ).fetchall()

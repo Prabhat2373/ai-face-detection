@@ -357,7 +357,8 @@ class FaceEngine:
             self._last_detection = snapshot
         self._update_camera_alarm_state(camera_key, known_faces, unknown_faces)
         should_alarm = self._should_alarm_camera(camera_key, unknown_faces)
-        camera_record = self.store.get_camera(camera_id, tenant) if camera_id else None
+        clean_cam_id = camera_id.split("::")[-1] if camera_id and "::" in camera_id else camera_id
+        camera_record = self.store.get_camera(clean_cam_id, tenant) if clean_cam_id else None
         camera_name = str(camera_record.get("name") or "") if camera_record else None
         if unknown_faces:
             now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
@@ -738,7 +739,12 @@ class FaceEngine:
                         time.sleep(0.005)
                         continue
                     try:
-                        result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, camera_department_id)
+                        # Dynamically query the database for this camera's department_id to handle real-time configuration changes immediately
+                        clean_cam_id = camera_id.split("::")[-1] if "::" in camera_id else camera_id
+                        current_cam = self.store.get_camera(clean_cam_id, self.default_tenant_id)
+                        current_dept_id = str(current_cam.get("department_id") or "") if current_cam else ""
+
+                        result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
                         self._set_camera_frame_state(
                             camera_id,
                             last_faces=result.get("faces") or [],
@@ -1006,8 +1012,13 @@ class FaceEngine:
             department_ids = sorted({department_id for sample in samples for department_id in sample[2]})
             active = all(sample[3] for sample in samples)
             authorized = True
-            if employee_id and camera_department_id and department_ids:
-                authorized = camera_department_id in department_ids
+            if employee_id:
+                if camera_department_id:
+                    # If camera has a department, the employee MUST belong to it
+                    authorized = camera_department_id in department_ids
+                else:
+                    # If camera has NO department (general camera), anyone is authorized
+                    authorized = True
             if not active:
                 authorized = False
             if best is None or score > float(best["score"]):
@@ -1022,6 +1033,8 @@ class FaceEngine:
                 }
 
         if best is None or float(best["score"]) < self.match_threshold:
+            return None
+        if not best.get("authorized", True):
             return None
         return best
 
@@ -1557,12 +1570,22 @@ async def delete_camera(camera_id: str, x_tenant_id: str | None = Header(default
 @app.post("/recognize")
 async def recognize(payload: RecognizeRequest, x_tenant_id: str | None = Header(default=None)) -> dict[str, Any]:
     image = decode_base64_image(payload.imageBase64)
+    # Fetch camera department_id dynamically for HTTP recognition calls
+    camera_id = payload.cameraId
+    tenant = payload.tenantId or x_tenant_id or "default"
+    camera_dept_id = None
+    if camera_id:
+        cam_rec = await asyncio.to_thread(engine.store.get_camera, camera_id, tenant)
+        if cam_rec:
+            camera_dept_id = cam_rec.get("department_id")
+
     result = await asyncio.to_thread(
         engine.recognize,
         image,
         payload.cameraRole or "general",
-        payload.cameraId,
-        payload.tenantId or x_tenant_id,
+        camera_id,
+        tenant,
+        camera_dept_id,
     )
     return result
 
