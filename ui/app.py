@@ -204,6 +204,24 @@ def main():
     window = MainWindow()
     window.show()
 
+    # Automatic Update Check
+    try:
+        from ui.updater import UpdateCheckWorker, UpdateDialog
+        current_ver = os.getenv("FACEAGENT_VERSION", "1.0.0")
+        update_url = os.getenv("AUTO_UPDATE_URL")
+        # Only perform update check if update_url is set via env
+        if update_url:
+            def on_update_available(update_info):
+                update_info["current_version"] = current_ver
+                dialog = UpdateDialog(window, update_info)
+                dialog.exec()
+
+            window.updater_worker = UpdateCheckWorker(current_ver, update_url)
+            window.updater_worker.update_available.connect(on_update_available)
+            window.updater_worker.start()
+    except Exception as e:
+        print("Failed to initialize update check:", e)
+
     try:
         # Run application event loop
         sys.exit(app.exec())
