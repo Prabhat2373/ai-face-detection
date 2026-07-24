@@ -1,5 +1,10 @@
 {
-  "version": "1.0.2",
-  "url": "https://github.com/Prabhat2373/ai-face-detection/releases/download/v1.0.2/Otence_Intelligence_macOS.dmg",
-  "notes": "Added list pagination and fixed button colors."
+  "version": "1.0.1",
+  "notes": "Added list pagination, fixed button colors, and optimized face-authorization checks.",
+  "platforms": {
+    "windows": "https://example.com/downloads/FaceAgent_Setup_1.0.1.exe",
+    "macos": "https://example.com/downloads/Otence_Intelligence_1.0.1.dmg",
+    "linux": "https://example.com/downloads/FaceAgent_1.0.1.tar.gz"
+  },
+  "url": "https://example.com/downloads/generic_fallback.zip"
 }

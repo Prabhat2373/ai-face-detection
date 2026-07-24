@@ -153,9 +153,21 @@ class UpdateDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _start_download(self):
-        download_url = self.info.get("url")
+        download_url = None
+        platforms = self.info.get("platforms")
+        if isinstance(platforms, dict):
+            if sys.platform == "win32":
+                download_url = platforms.get("windows")
+            elif sys.platform == "darwin":
+                download_url = platforms.get("macos")
+            else:
+                download_url = platforms.get("linux")
+
         if not download_url:
-            QMessageBox.warning(self, "Error", "Download URL not found in update manifest.")
+            download_url = self.info.get("url")
+
+        if not download_url:
+            QMessageBox.warning(self, "Error", "Download URL for your operating system was not found in the update manifest.")
             return
 
         self.btn_update.setEnabled(False)
