@@ -184,6 +184,7 @@ class DepartmentsPage(QWidget):
     def _populate_table(self, departments):
         self._table.setRowCount(len(departments))
         for row_idx, dept in enumerate(departments):
+            self._table.setRowHeight(row_idx, 54)
             self._table.setItem(row_idx, 0, QTableWidgetItem(dept.get("name", "")))
             self._table.setItem(row_idx, 1, QTableWidgetItem(dept.get("description", "")))
             self._table.setItem(row_idx, 2, QTableWidgetItem(str(dept.get("employee_count", 0))))
@@ -234,7 +235,7 @@ class DepartmentsPage(QWidget):
         widget = QWidget()
         widget.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignCenter)
 
@@ -243,9 +244,9 @@ class DepartmentsPage(QWidget):
         edit_btn.setIconSize(QSize(16, 16))
         edit_btn.setToolTip("Edit Department")
         edit_btn.setCursor(Qt.PointingHandCursor)
-        edit_btn.setFixedSize(36, 28)
+        edit_btn.setFixedSize(36, 24)
         edit_btn.setStyleSheet(
-            "QPushButton { background: #1a73e8; border: none; border-radius: 6px; } "
+            "QPushButton { background: #1a73e8; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-height: 24px; max-height: 24px; } "
             "QPushButton:hover { background: #1557b0; }"
         )
         edit_btn.clicked.connect(lambda _checked=False, dept=department: self._edit_department(dept))
@@ -262,9 +263,9 @@ class DepartmentsPage(QWidget):
         delete_btn.setIconSize(QSize(16, 16))
         delete_btn.setToolTip("Delete Department")
         delete_btn.setCursor(Qt.PointingHandCursor)
-        delete_btn.setFixedSize(36, 28)
+        delete_btn.setFixedSize(36, 24)
         delete_btn.setStyleSheet(
-            "QPushButton { background: #ef4444; border: none; border-radius: 6px; } "
+            "QPushButton { background: #ef4444; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-height: 24px; max-height: 24px; } "
             "QPushButton:hover { background: #dc2626; }"
         )
         delete_btn.clicked.connect(lambda _checked=False, dept=department: self._delete_department(dept))

@@ -417,6 +417,7 @@ class AttendancePage(QWidget):
 
         for idx, rec in enumerate(records, start=1):
             row_idx = idx - 1
+            self._table.setRowHeight(row_idx, 56)
             # index
             item_idx = QTableWidgetItem(str(idx))
             item_idx.setTextAlignment(Qt.AlignCenter)

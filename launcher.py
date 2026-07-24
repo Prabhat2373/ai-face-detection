@@ -445,12 +445,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
                 exit_code = launch_ui_normal(ui_script, env)
     finally:
-        # Stop backend if we started it
-        if started_backend and backend_proc is not None:
-            try:
-                backend_proc.stop()
-            except Exception:
-                pass
+        # Keep the backend running as a background service even if the UI application is closed.
+        # This allows alarms and attendance tracking to remain active continuously in the background.
+        pass
 
     return int(exit_code or 0)
 

@@ -208,12 +208,8 @@ def main():
         # Run application event loop
         sys.exit(app.exec())
     finally:
-        # Ensure backend started by this UI is stopped on exit.
-        if backend:
-            try:
-                backend.stop()
-            except Exception:
-                pass
+        # Keep backend process running in the background when the main window is closed
+        pass
 
 
 if __name__ == "__main__":

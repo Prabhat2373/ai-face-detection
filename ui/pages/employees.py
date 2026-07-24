@@ -419,7 +419,7 @@ class EmployeesPage(QWidget):
         widget = QWidget()
         widget.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignCenter)
 
@@ -428,12 +428,16 @@ class EmployeesPage(QWidget):
         edit_btn.setIconSize(QSize(16, 16))
         edit_btn.setToolTip("Edit Employee")
         edit_btn.setCursor(Qt.PointingHandCursor)
-        edit_btn.setFixedSize(36, 28)
+        edit_btn.setFixedSize(36, 24)
         edit_btn.setStyleSheet("""
             QPushButton {
                 background: #1a73e8;
                 border: none;
-                border-radius: 6px;
+                border-radius: 7px;
+                padding: 2px 2px;
+                margin: 0px;
+                min-height: 24px;
+                max-height: 24px;
             }
             QPushButton:hover {
                 background: #1557b0;
@@ -453,12 +457,16 @@ class EmployeesPage(QWidget):
         delete_btn.setIconSize(QSize(16, 16))
         delete_btn.setToolTip("Delete Employee")
         delete_btn.setCursor(Qt.PointingHandCursor)
-        delete_btn.setFixedSize(36, 28)
+        delete_btn.setFixedSize(36, 24)
         delete_btn.setStyleSheet("""
             QPushButton {
                 background: #ef4444;
                 border: none;
-                border-radius: 6px;
+                border-radius: 7px;
+                padding: 2px 2px;
+                margin: 0px;
+                min-height: 24px;
+                max-height: 24px;
             }
             QPushButton:hover {
                 background: #dc2626;

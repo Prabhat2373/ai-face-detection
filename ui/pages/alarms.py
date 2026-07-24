@@ -213,6 +213,7 @@ class AlarmsPage(QWidget):
 
         for idx, evt in enumerate(events, start=1):
             row_idx = idx - 1
+            self._table.setRowHeight(row_idx, 54)
 
             # Index
             item_idx = QTableWidgetItem(str(idx))
@@ -269,13 +270,13 @@ class AlarmsPage(QWidget):
                 action_widget = QWidget()
                 action_widget.setStyleSheet("background: transparent;")
                 action_layout = QHBoxLayout(action_widget)
-                action_layout.setContentsMargins(4, 2, 4, 2)
+                action_layout.setContentsMargins(0, 0, 0, 0)
                 action_layout.setAlignment(Qt.AlignCenter)
 
                 btn_view = QPushButton("View")
                 btn_view.setCursor(Qt.PointingHandCursor)
                 btn_view.setStyleSheet(
-                    "QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border: none; border-radius: 6px; padding: 4px 14px; min-width: 64px; max-width: 64px; min-height: 28px; max-height: 28px; } "
+                    "QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-width: 64px; max-width: 64px; min-height: 24px; max-height: 24px; } "
                     "QPushButton:hover { background: #1557b0; }"
                 )
                 btn_view.clicked.connect(lambda _, path=snap_path: self._show_snapshot_dialog(path))

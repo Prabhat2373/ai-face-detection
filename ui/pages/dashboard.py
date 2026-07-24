@@ -108,6 +108,7 @@ class DashboardPage(QWidget):
         records = self.db.recent_attendance(50)
         self._attendance_table.setRowCount(len(records))
         for row_idx, rec in enumerate(records):
+            self._attendance_table.setRowHeight(row_idx, 54)
             self._attendance_table.setItem(row_idx, 0, QTableWidgetItem(rec.get("label", "")))
             first = rec.get("first_appearance", "")
             if first:

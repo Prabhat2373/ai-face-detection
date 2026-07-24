@@ -91,7 +91,7 @@ class CameraDialog(QDialog):
         idx = self._role_combo.findText(camera.get("camera_role", "general"))
         if idx >= 0:
             self._role_combo.setCurrentIndex(idx)
-        
+
         dept_id = camera.get("department_id")
         dept_idx = 0
         if dept_id:
@@ -229,6 +229,7 @@ class CamerasPage(QWidget):
     def _populate_table(self, cameras):
         self._table.setRowCount(len(cameras))
         for row_idx, cam in enumerate(cameras):
+            self._table.setRowHeight(row_idx, 54)
             self._table.setItem(row_idx, 0, QTableWidgetItem(cam.get("name", "")))
             self._table.setItem(row_idx, 1, QTableWidgetItem(cam.get("rtsp_url", "")))
             self._table.setItem(row_idx, 2, QTableWidgetItem(cam.get("camera_role", "general")))
@@ -258,7 +259,7 @@ class CamerasPage(QWidget):
             action_widget = QWidget()
             action_widget.setStyleSheet("background: transparent;")
             action_layout = QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(8, 4, 8, 4)
+            action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.setSpacing(0)
             action_layout.setAlignment(Qt.AlignCenter)
 
@@ -267,9 +268,9 @@ class CamerasPage(QWidget):
             btn_edit.setIconSize(QSize(16, 16))
             btn_edit.setToolTip("Edit Camera")
             btn_edit.setCursor(Qt.PointingHandCursor)
-            btn_edit.setFixedSize(36, 28)
+            btn_edit.setFixedSize(36, 24)
             btn_edit.setStyleSheet(
-                "QPushButton { background: #1a73e8; border: none; border-radius: 6px; } "
+                "QPushButton { background: #1a73e8; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-height: 24px; max-height: 24px; } "
                 "QPushButton:hover { background: #1557b0; }"
             )
             btn_edit.clicked.connect(lambda _, camera=cam: self._edit_camera(camera))
@@ -286,9 +287,9 @@ class CamerasPage(QWidget):
             btn_delete.setIconSize(QSize(16, 16))
             btn_delete.setToolTip("Delete Camera")
             btn_delete.setCursor(Qt.PointingHandCursor)
-            btn_delete.setFixedSize(36, 28)
+            btn_delete.setFixedSize(36, 24)
             btn_delete.setStyleSheet(
-                "QPushButton { background: #ef4444; border: none; border-radius: 6px; } "
+                "QPushButton { background: #ef4444; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-height: 24px; max-height: 24px; } "
                 "QPushButton:hover { background: #dc2626; }"
             )
             btn_delete.clicked.connect(lambda _, camera=cam: self._delete_camera(camera))
