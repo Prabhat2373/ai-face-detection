@@ -89,8 +89,14 @@ def ensure_venv_interpreter() -> None:
         # Prepare environment for the new process and mark that we've re-execed.
         new_env = os.environ.copy()
         new_env["FACEAGENT_LAUNCHER_REEXEC"] = "1"
+        
+        args = [str(venv_python)]
+        if sys.platform == "darwin":
+            args[0] = "Otence Intelligence"
+        args.extend([str(script_path), *sys.argv[1:]])
+        
         # Use execve so we can pass a modified environment (avoids repeating).
-        os.execve(str(venv_python), [str(venv_python), str(script_path), *sys.argv[1:]], new_env)
+        os.execve(str(venv_python), args, new_env)
     except Exception:
         # On any error, give up and continue with the current interpreter
         return
@@ -207,8 +213,11 @@ def verify_license(license_path: Path) -> dict:
 
 def launch_ui_activation(ui_script: Path, env: dict[str, str]) -> int:
     """Launch the UI in Activation Mode (subprocess) and return the exit code."""
-    cmd = [sys.executable, str(ui_script), "--activation", "--no-auto-backend"]
-    proc = subprocess.Popen(cmd, env=env)
+    exec_path = sys.executable
+    if sys.platform == "darwin":
+        exec_path = "Otence Intelligence"
+    cmd = [exec_path, str(ui_script), "--activation", "--no-auto-backend"]
+    proc = subprocess.Popen(cmd, env=env, executable=sys.executable)
     try:
         return proc.wait()
     except KeyboardInterrupt:
@@ -222,8 +231,11 @@ def launch_ui_activation(ui_script: Path, env: dict[str, str]) -> int:
 
 def launch_ui_normal(ui_script: Path, env: dict[str, str]) -> int:
     """Launch main UI (subprocess) and return exit code."""
-    cmd = [sys.executable, str(ui_script), "--no-auto-backend"]
-    proc = subprocess.Popen(cmd, env=env)
+    exec_path = sys.executable
+    if sys.platform == "darwin":
+        exec_path = "Otence Intelligence"
+    cmd = [exec_path, str(ui_script), "--no-auto-backend"]
+    proc = subprocess.Popen(cmd, env=env, executable=sys.executable)
     try:
         return proc.wait()
     except KeyboardInterrupt:

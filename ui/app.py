@@ -57,6 +57,33 @@ def activation_mode() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    if sys.platform == "darwin":
+        # Force macOS menu bar and dock hover to show the branded name
+        sys.argv[0] = "Otence Intelligence"
+        try:
+            import ctypes
+            import ctypes.util
+            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.objc_msgSend.restype = ctypes.c_void_p
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+            ns_process_info_class = objc.objc_getClass(b"NSProcessInfo")
+            process_info_sel = objc.sel_registerName(b"processInfo")
+            process_info = objc.objc_msgSend(ns_process_info_class, process_info_sel)
+            if process_info:
+                ns_string_class = objc.objc_getClass(b"NSString")
+                string_utf8_sel = objc.sel_registerName(b"stringWithUTF8String:")
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+                ns_name = objc.objc_msgSend(ns_string_class, string_utf8_sel, b"Otence Intelligence")
+                
+                set_process_name_sel = objc.sel_registerName(b"setProcessName:")
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                objc.objc_msgSend(process_info, set_process_name_sel, ns_name)
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("Otence Intelligence")
     app.setApplicationDisplayName("Otence Intelligence - Activation")
@@ -126,6 +153,39 @@ def main():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+
+    if sys.platform == "darwin":
+        # Force macOS menu bar and dock hover to show the branded name
+        sys.argv[0] = "Otence Intelligence"
+        try:
+            # Try setting the process name via ctypes Cocoa call
+            import ctypes
+            import ctypes.util
+            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.objc_msgSend.restype = ctypes.c_void_p
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+            # Get NSProcessInfo class
+            ns_process_info_class = objc.objc_getClass(b"NSProcessInfo")
+            # Get processInfo selector
+            process_info_sel = objc.sel_registerName(b"processInfo")
+            # Call [NSProcessInfo processInfo]
+            process_info = objc.objc_msgSend(ns_process_info_class, process_info_sel)
+            if process_info:
+                # Create NSString for "Otence Intelligence"
+                ns_string_class = objc.objc_getClass(b"NSString")
+                string_utf8_sel = objc.sel_registerName(b"stringWithUTF8String:")
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+                ns_name = objc.objc_msgSend(ns_string_class, string_utf8_sel, b"Otence Intelligence")
+                
+                # Set processName selector
+                set_process_name_sel = objc.sel_registerName(b"setProcessName:")
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                objc.objc_msgSend(process_info, set_process_name_sel, ns_name)
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     app.setApplicationName("Otence Intelligence")

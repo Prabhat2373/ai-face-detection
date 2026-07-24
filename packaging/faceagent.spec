@@ -122,3 +122,18 @@ coll = COLLECT(
     upx_exclude=[],
     name="FaceAgent",
 )
+
+import sys
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="Otence Intelligence.app",
+        icon=icon_file,
+        bundle_identifier="com.otence.intelligence",
+        info_plist={
+            "CFBundleDisplayName": "Otence Intelligence",
+            "CFBundleName": "Otence Intelligence",
+            "CFBundleExecutable": "FaceAgent",
+            "NSHighResolutionCapable": True,
+        }
+    )
