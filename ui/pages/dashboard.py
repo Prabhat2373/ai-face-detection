@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
-from ..widgets import StatCard, SectionHeader, Pill
+from ..widgets import StatCard, SectionHeader, Pill, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 
 
@@ -92,6 +92,10 @@ class DashboardPage(QWidget):
         self._attendance_table.setMinimumHeight(200)
         self._main_layout.addWidget(self._attendance_table)
 
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        self._main_layout.addWidget(self.pagination)
+
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -105,7 +109,16 @@ class DashboardPage(QWidget):
         self._stat_faces.set_value(str(stats["known_faces"]))
         self._stat_attendance.set_value(str(stats["total_attendance"]))
 
-        records = self.db.recent_attendance(50)
+        self._recent_records = self.db.recent_attendance(100)
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        records = self.pagination.get_slice(getattr(self, "_recent_records", []))
+        if not records:
+            render_empty_table_placeholder(self._attendance_table, col_count=5, message="No recent attendance activity")
+            return
+
+        self._attendance_table.clearSpans()
         self._attendance_table.setRowCount(len(records))
         for row_idx, rec in enumerate(records):
             self._attendance_table.setRowHeight(row_idx, 54)

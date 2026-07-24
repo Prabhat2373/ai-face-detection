@@ -209,10 +209,12 @@ QLineEdit::placeholder {{
 }}
 
 QComboBox QAbstractItemView {{
+    background-color: {surface};
     background: {surface};
     border: 1px solid {line};
     color: {text};
-    selection-background-color: {selection};
+    selection-background-color: {primary};
+    selection-color: #ffffff;
 }}
 
 QComboBox::drop-down, QDateEdit::drop-down {{

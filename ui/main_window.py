@@ -319,7 +319,7 @@ class MainWindow(QMainWindow):
         display_text = f"Admin User\n{company_name}" if company_name else "Admin User\nHead Office"
         user = QLabel(display_text)
         user.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(user)
+        # layout.addWidget(user)
 
         return bar
 

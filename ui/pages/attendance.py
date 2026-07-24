@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QDate, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QPixmap
 
-from ..widgets import StatCard
+from ..widgets import StatCard, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 from ..backend_process import writable_app_dir
 
@@ -217,6 +217,10 @@ class AttendancePage(QWidget):
         self._table.setMinimumHeight(360)
         layout.addWidget(self._table)
 
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        layout.addWidget(self.pagination)
+
         # Footer
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
@@ -259,6 +263,20 @@ class AttendancePage(QWidget):
 
         employees = self.db.list_employees()
         cameras = self.db.list_cameras()
+        depts = self.db.list_departments()
+
+        # Fill department filter
+        cur_dept = self.dept_filter.currentData() if hasattr(self, "dept_filter") else None
+        self.dept_filter.blockSignals(True)
+        self.dept_filter.clear()
+        self.dept_filter.addItem("All Departments", None)
+        for d in depts:
+            self.dept_filter.addItem(d.get("name", ""), d.get("id"))
+        if cur_dept:
+            idx = self.dept_filter.findData(cur_dept)
+            if idx >= 0:
+                self.dept_filter.setCurrentIndex(idx)
+        self.dept_filter.blockSignals(False)
 
         # KPIs
         total_emps = len(employees)
@@ -269,31 +287,20 @@ class AttendancePage(QWidget):
 
         self._stat_total.set_value(str(total_emps))
         try:
-            self._stat_total.set_unit(f"{len(self.db.list_departments())} departments")
+            self._stat_total.set_unit(f"{len(depts)} departments")
         except Exception:
             pass
         self._stat_checked.set_value(str(checked_today))
         self._stat_alarms.set_value(str(alarms))
         self._stat_cameras.set_value(f"{cameras_online}/{total_cameras}")
 
-        # populate department filter
-        depts = [{"id": None, "name": "All Departments"}] + self.db.list_departments()
-        self._departments = depts
-        self.dept_filter.blockSignals(True)
-        self.dept_filter.clear()
-        for d in depts:
-            self.dept_filter.addItem(d.get("name") or "Unknown", d.get("id"))
-        self.dept_filter.setCurrentIndex(0)
-        self.dept_filter.blockSignals(False)
-
         # build lookup of employees by name
         emp_by_label = {}
         for emp in employees:
-            name = str(emp.get("name") or "").strip()
-            emp_by_label[name] = emp
-            emp_by_label[name.lower()] = emp
-            if emp.get("id"):
-                emp_by_label[emp["id"]] = emp
+            label = emp.get("name", "")
+            if label:
+                emp_by_label[label] = emp
+                emp_by_label[label.lower()] = emp
 
         # merged rows: first include attendance records (present and unknowns)
         merged = []
@@ -373,10 +380,12 @@ class AttendancePage(QWidget):
         }
 
     def _apply_filters(self):
-        rows = list(self._all_rows) if hasattr(self, "_all_rows") else []
+        if not hasattr(self, "_all_rows"):
+            return
+        rows = list(self._all_rows)
 
         # department filter (match id or name)
-        dept_id = self.dept_filter.currentData()
+        dept_id = self.dept_filter.currentData() if hasattr(self, "dept_filter") else None
         if dept_id:
             def dept_match(r):
                 emp = r.get("employee") or {}
@@ -411,6 +420,16 @@ class AttendancePage(QWidget):
         self._populate_table(rows)
 
     def _populate_table(self, records):
+        self._filtered_records = records
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        records = self.pagination.get_slice(self._filtered_records)
+        if not records:
+            render_empty_table_placeholder(self._table, col_count=9, message="No attendance records found")
+            return
+
+        self._table.clearSpans()
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(records))
         self._table.verticalHeader().setDefaultSectionSize(56)

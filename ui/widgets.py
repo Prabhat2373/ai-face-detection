@@ -273,3 +273,179 @@ def get_edit_icon(color: str = "#ffffff", size: int = 18) -> QIcon:
 def get_delete_icon(color: str = "#ffffff", size: int = 18) -> QIcon:
     """Get Lucide trash delete icon."""
     return create_svg_icon(DELETE_SVG_TEMPLATE, color, size)
+
+
+# ── Table Empty Placeholder & Pagination ────────────────────────────────
+
+def render_empty_table_placeholder(table, col_count: int, message: str = "No data found"):
+    """Render a clean centered 'No data found' row spanning all table columns."""
+    from PySide6.QtWidgets import QTableWidgetItem
+    from PySide6.QtGui import QBrush, QColor, QFont
+    table.clearSpans()
+    table.setRowCount(1)
+    table.setRowHeight(0, 90)
+    table.clearContents()
+    item = QTableWidgetItem(f"⚠️  {message}")
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(Qt.NoItemFlags)
+    item.setForeground(QBrush(QColor("#9badc8")))
+    font = QFont()
+    font.setPointSize(13)
+    font.setBold(True)
+    item.setFont(font)
+    table.setItem(0, 0, item)
+    table.setSpan(0, 0, 1, col_count)
+
+
+class PaginationWidget(QWidget):
+    """Reusable pagination control widget for data tables."""
+
+    def __init__(self, parent=None, page_sizes: list[int] | None = None, on_page_change=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QComboBox
+        self.on_page_change = on_page_change
+        self.page_sizes = page_sizes or [10, 25, 50, 100]
+        self.current_page = 1
+        self.page_size = self.page_sizes[0]
+        self.total_items = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(12)
+
+        # Count summary e.g. "Showing 1–10 of 42 records"
+        self.summary_label = QLabel("No records found")
+        self.summary_label.setStyleSheet("color: #6b7d9a; font-size: 13px; font-weight: 500;")
+        layout.addWidget(self.summary_label)
+
+        layout.addStretch()
+
+        # Page Size Selector
+        page_size_layout = QHBoxLayout()
+        page_size_layout.setSpacing(6)
+        lbl_show = QLabel("Rows per page:")
+        lbl_show.setStyleSheet("color: #475569; font-size: 13px;")
+        self.size_combo = QComboBox()
+        self.size_combo.setStyleSheet("""
+            QComboBox {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                padding: 4px 8px;
+                min-width: 60px;
+                font-size: 12px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                selection-background-color: #1a73e8;
+                selection-color: #ffffff;
+            }
+        """)
+        for size in self.page_sizes:
+            self.size_combo.addItem(str(size), size)
+        self.size_combo.currentIndexChanged.connect(self._on_size_changed)
+        page_size_layout.addWidget(lbl_show)
+        page_size_layout.addWidget(self.size_combo)
+        layout.addLayout(page_size_layout)
+
+        # Nav Buttons
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(6)
+
+        btn_style = """
+            QPushButton {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                padding: 4px 14px;
+                font-weight: 600;
+                font-size: 12px;
+                min-width: 60px;
+                min-height: 28px;
+            }
+            QPushButton:hover:enabled {
+                background: #f1f5f9;
+                border-color: #1a73e8;
+                color: #1a73e8;
+            }
+            QPushButton:disabled {
+                background: #f8fafc;
+                color: #94a3b8;
+                border-color: #e2e8f0;
+            }
+        """
+
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_prev.setStyleSheet(btn_style)
+        self.btn_prev.setCursor(Qt.PointingHandCursor)
+        self.btn_prev.clicked.connect(self.prev_page)
+        nav_layout.addWidget(self.btn_prev)
+
+        self.page_label = QLabel("Page 1 of 1")
+        self.page_label.setStyleSheet("color: #111827; font-weight: bold; font-size: 13px; padding: 0 8px;")
+        nav_layout.addWidget(self.page_label)
+
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_next.setStyleSheet(btn_style)
+        self.btn_next.setCursor(Qt.PointingHandCursor)
+        self.btn_next.clicked.connect(self.next_page)
+        nav_layout.addWidget(self.btn_next)
+
+        layout.addLayout(nav_layout)
+
+    def total_pages(self) -> int:
+        if self.total_items == 0:
+            return 1
+        return max(1, (self.total_items + self.page_size - 1) // self.page_size)
+
+    def update_state(self, total_items: int):
+        self.total_items = total_items
+        max_p = self.total_pages()
+        if self.current_page > max_p:
+            self.current_page = max_p
+        if self.current_page < 1:
+            self.current_page = 1
+
+        if self.total_items == 0:
+            self.summary_label.setText("No records found")
+            self.page_label.setText("Page 0 of 0")
+            self.btn_prev.setEnabled(False)
+            self.btn_next.setEnabled(False)
+        else:
+            start_idx = (self.current_page - 1) * self.page_size + 1
+            end_idx = min(self.current_page * self.page_size, self.total_items)
+            self.summary_label.setText(f"Showing {start_idx}–{end_idx} of {self.total_items} records")
+            self.page_label.setText(f"Page {self.current_page} of {max_p}")
+            self.btn_prev.setEnabled(self.current_page > 1)
+            self.btn_next.setEnabled(self.current_page < max_p)
+
+    def get_slice(self, items: list) -> list:
+        self.update_state(len(items))
+        if not items:
+            return []
+        start_idx = (self.current_page - 1) * self.page_size
+        end_idx = start_idx + self.page_size
+        return items[start_idx:end_idx]
+
+    def prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            if self.on_page_change:
+                self.on_page_change()
+
+    def next_page(self):
+        if self.current_page < self.total_pages():
+            self.current_page += 1
+            if self.on_page_change:
+                self.on_page_change()
+
+    def _on_size_changed(self, index: int):
+        self.page_size = self.size_combo.itemData(index) or 10
+        self.current_page = 1
+        if self.on_page_change:
+            self.on_page_change()

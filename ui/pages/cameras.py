@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from typing import Optional
 
-from ..widgets import SectionHeader, Pill, get_edit_icon, get_delete_icon
+from ..widgets import SectionHeader, Pill, get_edit_icon, get_delete_icon, PaginationWidget, render_empty_table_placeholder
 from PySide6.QtCore import QSize
 
 
@@ -34,7 +34,7 @@ class CameraDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        self.setStyleSheet("QDialog { background:#f4f6fb; color:#111827; } QLabel { color:#111827; } QLineEdit, QComboBox { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:10px 13px; } QDialogButtonBox QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QDialogButtonBox QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
+        self.setStyleSheet("QDialog { background:#f4f6fb; color:#111827; } QLabel { color:#111827; } QLineEdit, QComboBox { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:10px 13px; } QComboBox QAbstractItemView { background-color: #ffffff; color: #111827; selection-background-color: #1a73e8; selection-color: #ffffff; } QDialogButtonBox QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QDialogButtonBox QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
         title = QLabel("Edit Camera" if self.camera else "New Camera")
         title.setProperty("class", "page-title")
         layout.addWidget(title)
@@ -207,15 +207,9 @@ class CamerasPage(QWidget):
         self._table.doubleClicked.connect(self._edit_selected)
         layout.addWidget(self._table)
 
-        # Footer
-        footer = QWidget()
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 0, 0, 0)
-        self._count_label = QLabel("0 cameras")
-        self._count_label.setStyleSheet("color: #6b7d9a; font-size: 12px;")
-        footer_layout.addWidget(self._count_label)
-        footer_layout.addStretch()
-        layout.addWidget(footer)
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        layout.addWidget(self.pagination)
 
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
@@ -227,6 +221,16 @@ class CamerasPage(QWidget):
         self._populate_table(self._cameras)
 
     def _populate_table(self, cameras):
+        self._filtered_cameras = cameras
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        cameras = self.pagination.get_slice(self._filtered_cameras)
+        if not cameras:
+            render_empty_table_placeholder(self._table, col_count=9, message="No cameras found")
+            return
+
+        self._table.clearSpans()
         self._table.setRowCount(len(cameras))
         for row_idx, cam in enumerate(cameras):
             self._table.setRowHeight(row_idx, 54)
@@ -297,8 +301,6 @@ class CamerasPage(QWidget):
             self._table.setCellWidget(row_idx, 7, action_widget)
 
             self._table.setItem(row_idx, 8, QTableWidgetItem(cam.get("id", "")))
-
-        self._count_label.setText(f"{len(cameras)} cameras")
 
     def _filter_table(self, text):
         if not hasattr(self, '_cameras'):

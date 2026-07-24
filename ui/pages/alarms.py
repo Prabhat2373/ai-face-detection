@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QPixmap
 
-from ..widgets import StatCard
+from ..widgets import StatCard, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 
 
@@ -115,6 +115,10 @@ class AlarmsPage(QWidget):
         self._table.setMinimumHeight(380)
         layout.addWidget(self._table)
 
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        layout.addWidget(self.pagination)
+
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -209,6 +213,16 @@ class AlarmsPage(QWidget):
         self._populate_table(filtered)
 
     def _populate_table(self, events):
+        self._filtered_events = events
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        events = self.pagination.get_slice(self._filtered_events)
+        if not events:
+            render_empty_table_placeholder(self._table, col_count=7, message="No unknown person alarms found")
+            return
+
+        self._table.clearSpans()
         self._table.setRowCount(len(events))
         self._table.verticalHeader().setDefaultSectionSize(54)
 

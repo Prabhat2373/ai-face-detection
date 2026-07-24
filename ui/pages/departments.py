@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize
 from typing import Optional
 
-from ..widgets import SectionHeader, get_edit_icon, get_delete_icon
+from ..widgets import SectionHeader, get_edit_icon, get_delete_icon, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 
 
@@ -162,15 +162,9 @@ class DepartmentsPage(QWidget):
         self._table.setColumnHidden(5, True)  # Hide ID
         layout.addWidget(self._table)
 
-        # Footer
-        footer = QWidget()
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 0, 0, 0)
-        self._count_label = QLabel("0 departments")
-        self._count_label.setStyleSheet("color: #6b7d9a; font-size: 12px;")
-        footer_layout.addWidget(self._count_label)
-        footer_layout.addStretch()
-        layout.addWidget(footer)
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        layout.addWidget(self.pagination)
 
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
@@ -182,6 +176,16 @@ class DepartmentsPage(QWidget):
         self._populate_table(self._departments)
 
     def _populate_table(self, departments):
+        self._filtered_departments = departments
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        departments = self.pagination.get_slice(self._filtered_departments)
+        if not departments:
+            render_empty_table_placeholder(self._table, col_count=6, message="No departments found")
+            return
+
+        self._table.clearSpans()
         self._table.setRowCount(len(departments))
         for row_idx, dept in enumerate(departments):
             self._table.setRowHeight(row_idx, 54)
@@ -200,8 +204,6 @@ class DepartmentsPage(QWidget):
             self._table.setItem(row_idx, 3, QTableWidgetItem(created))
             self._table.setCellWidget(row_idx, 4, self._build_action_widget(dept))
             self._table.setItem(row_idx, 5, QTableWidgetItem(dept.get("id", "")))
-
-        self._count_label.setText(f"{len(departments)} departments")
 
     def _filter_table(self, text):
         if not hasattr(self, '_departments'):

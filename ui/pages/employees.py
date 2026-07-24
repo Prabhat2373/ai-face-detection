@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QPixmap
 from typing import Optional
 
-from ..widgets import SectionHeader, EmptyState, get_edit_icon, get_delete_icon
+from ..widgets import SectionHeader, EmptyState, get_edit_icon, get_delete_icon, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 from ..backend_client import BackendClient
 
@@ -55,6 +55,13 @@ class EmployeeDialog(QDialog):
                 border-radius: 7px;
                 padding: 10px 13px;
                 min-height: 22px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #e5e7eb;
+                selection-background-color: #1a73e8;
+                selection-color: #ffffff;
             }
             QLineEdit:focus, QComboBox:focus {
                 border-color: #1a73e8;
@@ -311,15 +318,9 @@ class EmployeesPage(QWidget):
         self._table.setColumnHidden(6, True)  # Hide ID column
         layout.addWidget(self._table)
 
-        # Count
-        footer = QWidget()
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 0, 0, 0)
-        self._count_label = QLabel("0 employees")
-        self._count_label.setProperty("class", "muted")
-        footer_layout.addWidget(self._count_label)
-        footer_layout.addStretch()
-        layout.addWidget(footer)
+        # Pagination Control
+        self.pagination = PaginationWidget(on_page_change=self._apply_pagination)
+        layout.addWidget(self.pagination)
 
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
@@ -331,6 +332,16 @@ class EmployeesPage(QWidget):
         self._populate_table(self._employees)
 
     def _populate_table(self, employees):
+        self._filtered_employees = employees
+        self._apply_pagination()
+
+    def _apply_pagination(self):
+        employees = self.pagination.get_slice(self._filtered_employees)
+        if not employees:
+            render_empty_table_placeholder(self._table, col_count=7, message="No employees found")
+            return
+
+        self._table.clearSpans()
         self._table.setRowCount(len(employees))
         for row_idx, emp in enumerate(employees):
             self._table.setRowHeight(row_idx, 54)
@@ -344,8 +355,6 @@ class EmployeesPage(QWidget):
             self._table.setItem(row_idx, 4, item)
             self._table.setCellWidget(row_idx, 5, self._build_action_widget(emp))
             self._table.setItem(row_idx, 6, QTableWidgetItem(emp.get("id", "")))
-
-        self._count_label.setText(f"{len(employees)} employees")
 
     def _filter_table(self, text):
         if not hasattr(self, '_employees'):
