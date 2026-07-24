@@ -44,6 +44,7 @@ os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 try:
     from python_recognizer.store import (
         SQLiteStore,
+        get_canonical_db_path,
         utc_now,
         iso_now,
         parse_float_env,
@@ -56,6 +57,7 @@ try:
 except ModuleNotFoundError:
     from store import (  # type: ignore
         SQLiteStore,
+        get_canonical_db_path,
         utc_now,
         iso_now,
         parse_float_env,
@@ -152,7 +154,7 @@ class FaceEngine:
     def __init__(self) -> None:
         app_dir = Path(__file__).resolve().parent
         self.snapshot_path = Path(os.getenv("SNAPSHOT_PATH", str(app_dir / "snapshots"))).expanduser()
-        db_path = Path(os.getenv("PYTHON_DB_PATH", str(app_dir / "data" / "app.db"))).expanduser()
+        db_path = get_canonical_db_path()
         self.store = SQLiteStore(db_path)
         self.default_tenant_id = normalize_tenant_id(os.getenv("DEFAULT_TENANT_ID", "default"))
         self.store.ensure_tenant(self.default_tenant_id, os.getenv("DEFAULT_TENANT_NAME", "Local Tenant"))
@@ -163,7 +165,7 @@ class FaceEngine:
         )
         self.detection_threshold = parse_float_env(
             "PYTHON_DETECTION_THRESHOLD",
-            parse_float_env("DETECTION_THRESHOLD", 0.5),
+            parse_float_env("DETECTION_THRESHOLD", 0.65),
         )
         self.snapshot_cooldown_ms = parse_int_env("SNAPSHOT_COOLDOWN_MS", 10_000)
         self.det_size = (
@@ -181,8 +183,8 @@ class FaceEngine:
         self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 10_000)
         self.alarm_enabled = os.getenv("ALARM_ENABLED", os.getenv("ALARM_FLAG", "true")).lower() in {"1", "true", "yes", "on"}
         self.alarm_unknown_frames = parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 1)
-        self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", 0.72)
-        self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.9)
+        self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", self.detection_threshold)
+        self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
         self.known_grace_ms = parse_int_env("KNOWN_GRACE_MS", 800)
         self.recognition_grace_ms = parse_int_env("RECOGNITION_GRACE_MS", 1_000)
         self.sync_enabled = os.getenv("SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -236,7 +238,7 @@ class FaceEngine:
     def _load_model(self) -> FaceAnalysis:
         providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
         model = FaceAnalysis(name=self.model_name, root=self.model_dir, providers=providers)
-        model.prepare(ctx_id=-1, det_size=self.det_size)
+        model.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.detection_threshold)
         return model
 
     def health(self) -> dict[str, Any]:
@@ -940,10 +942,38 @@ class FaceEngine:
     def _filter_faces(self, faces: list[Any]) -> list[Any]:
         filtered = []
         for face in faces:
-            if float(getattr(face, "det_score", 0.0)) < self.detection_threshold:
+            score = float(getattr(face, "det_score", 0.0))
+            if score < self.detection_threshold:
                 continue
             if self._embedding_for(face) is None:
                 continue
+
+            # Bounding box size & aspect ratio validation
+            bbox = [float(val) for val in getattr(face, "bbox", [0, 0, 0, 0])]
+            x1, y1, x2, y2 = bbox[:4]
+            w = max(0.0, x2 - x1)
+            h = max(0.0, y2 - y1)
+            if w < 40.0 or h < 40.0:
+                continue
+            aspect_ratio = w / max(1.0, h)
+            if aspect_ratio < 0.4 or aspect_ratio > 2.2:
+                continue
+
+            # 5-Point Facial Landmark Geometric Validation
+            kps = getattr(face, "kps", None)
+            if kps is not None and len(kps) >= 5:
+                try:
+                    left_eye, right_eye, nose, left_mouth, right_mouth = np.asarray(kps[:5], dtype=np.float32)
+                    eye_dist = float(np.linalg.norm(right_eye - left_eye))
+                    if eye_dist < 8.0:
+                        continue
+                    eye_y = float((left_eye[1] + right_eye[1]) / 2.0)
+                    mouth_y = float((left_mouth[1] + right_mouth[1]) / 2.0)
+                    if eye_y >= mouth_y:
+                        continue
+                except Exception:
+                    pass
+
             filtered.append(face)
         return filtered
 
@@ -987,7 +1017,7 @@ class FaceEngine:
         y = float(box.get("y") or 0.0)
         w = float(box.get("width") or 0.0)
         h = float(box.get("height") or 0.0)
-        if w < 60 or h < 60:
+        if w < 35 or h < 35:
             return False
         if x < 0 or y < 0:
             return False
@@ -997,9 +1027,23 @@ class FaceEngine:
 
     def _match_embedding(self, embedding: np.ndarray, camera_department_id: str | None = None) -> dict[str, Any] | None:
         best: dict[str, Any] | None = None
+
+        # Build set of camera department tokens (IDs and names) if camera is restricted to a department
+        camera_dept_tokens: set[str] = set()
+        if camera_department_id:
+            cleaned_id = str(camera_department_id).strip()
+            if cleaned_id:
+                camera_dept_tokens.add(cleaned_id)
+                dept_rec = self.store.get_department(cleaned_id, self.default_tenant_id)
+                if dept_rec:
+                    if dept_rec.get("id"):
+                        camera_dept_tokens.add(str(dept_rec["id"]).strip())
+                    if dept_rec.get("name"):
+                        camera_dept_tokens.add(str(dept_rec["name"]).strip())
+
         groups: dict[str, list[tuple[np.ndarray, str | None, list[str], bool]]] = {}
-        for label, sample_embedding, _updated_at, _sample_count, employee_id, department_ids, employee_active in self.store.all_embeddings():
-            groups.setdefault(label, []).append((sample_embedding, employee_id, department_ids, employee_active))
+        for label, sample_embedding, _updated_at, _sample_count, employee_id, department_tokens, employee_active in self.store.all_embeddings():
+            groups.setdefault(label, []).append((sample_embedding, employee_id, department_tokens, employee_active))
 
         for label, samples in groups.items():
             scores = [cosine_similarity(embedding, sample[0]) for sample in samples]
@@ -1009,18 +1053,25 @@ class FaceEngine:
             top_scores = scores[:3]
             score = max(top_scores[0], sum(top_scores) / len(top_scores))
             employee_id = next((sample[1] for sample in samples if sample[1]), None)
-            department_ids = sorted({department_id for sample in samples for department_id in sample[2]})
+            emp_dept_tokens = {token for sample in samples for token in sample[2]}
             active = all(sample[3] for sample in samples)
+
+            # Strict Department Authorization Enforcement:
+            # If camera has a department set, face MUST belong to an employee associated with that department.
             authorized = True
-            if employee_id:
-                if camera_department_id:
-                    # If camera has a department, the employee MUST belong to it
-                    authorized = camera_department_id in department_ids
+            if camera_dept_tokens:
+                if not employee_id:
+                    authorized = False
                 else:
-                    # If camera has NO department (general camera), anyone is authorized
-                    authorized = True
+                    authorized = bool(camera_dept_tokens & emp_dept_tokens)
+
             if not active:
                 authorized = False
+
+            # Ignore unauthorized candidates completely
+            if not authorized:
+                continue
+
             if best is None or score > float(best["score"]):
                 best = {
                     "label": label,
@@ -1028,13 +1079,11 @@ class FaceEngine:
                     "confidence": score,
                     "sampleCount": len(samples),
                     "employeeId": employee_id,
-                    "departmentIds": department_ids,
-                    "authorized": authorized,
+                    "departmentIds": sorted(emp_dept_tokens),
+                    "authorized": True,
                 }
 
         if best is None or float(best["score"]) < self.match_threshold:
-            return None
-        if not best.get("authorized", True):
             return None
         return best
 

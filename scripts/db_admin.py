@@ -6,7 +6,11 @@ import sqlite3
 from pathlib import Path
 
 
-DEFAULT_DB = Path("python_recognizer/data/app.db")
+try:
+    from python_recognizer.store import get_canonical_db_path
+    DEFAULT_DB = get_canonical_db_path()
+except Exception:
+    DEFAULT_DB = Path("python_recognizer/data/app.db")
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--db",
         default=str(DEFAULT_DB),
-        help="Path to the SQLite database file. Default: python_recognizer/data/app.db",
+        help=f"Path to the SQLite database file. Default: {DEFAULT_DB}",
     )
     parser.add_argument(
         "--table",

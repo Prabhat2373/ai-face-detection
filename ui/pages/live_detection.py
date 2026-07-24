@@ -183,7 +183,7 @@ class LiveDetectionPage(QWidget):
         desc = QLabel("RTSP feeds, face detection, and recognition")
         desc.setProperty("class", "page-desc")
         text_col.addWidget(title)
-        text_col.addWidget(desc)
+        # text_col.addWidget(desc)
         hdr_layout.addLayout(text_col)
         hdr_layout.addStretch()
 
@@ -192,7 +192,7 @@ class LiveDetectionPage(QWidget):
         controls.setSpacing(8)
         self.camera_selector = QComboBox()
         self.camera_selector.setMinimumWidth(200)
-        controls.addWidget(self.camera_selector)
+        # controls.addWidget(self.camera_selector)
 
         # self.start_btn = QPushButton("Start Detection")
         # self.start_btn.setProperty("class", "primary")
@@ -229,7 +229,7 @@ class LiveDetectionPage(QWidget):
         layout.addLayout(self._status_layout)
 
         # Camera grid
-        layout.addWidget(SectionHeader("Camera Feeds", "All available RTSP camera streams"))
+        # layout.addWidget(SectionHeader("Camera Feeds", "All available RTSP camera streams"))
         self._camera_grid = QGridLayout()
         self._camera_grid.setSpacing(12)
         layout.addLayout(self._camera_grid)

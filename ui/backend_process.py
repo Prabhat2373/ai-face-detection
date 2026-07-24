@@ -38,10 +38,18 @@ class BackendProcess:
 
         env = os.environ.copy()
         env.setdefault("FACEAGENT_BACKEND_URL", BACKEND_URL)
-        db_path = writable_app_dir() / "data" / "app.db"
-        snapshot_path = writable_app_dir() / "snapshots"
+
+        # Import unified canonical DB path resolver
+        try:
+            from python_recognizer.store import get_canonical_db_path
+            db_path = get_canonical_db_path()
+        except Exception:
+            db_path = writable_app_dir() / "data" / "app.db"
+
+        snapshot_path = db_path.parent.parent / "snapshots" if not getattr(sys, "frozen", False) else writable_app_dir() / "snapshots"
         self._copy_initial_data(db_path, snapshot_path)
-        env.setdefault("PYTHON_DB_PATH", str(db_path))
+        env["PYTHON_DB_PATH"] = str(db_path)
+        os.environ["PYTHON_DB_PATH"] = str(db_path)
         env.setdefault("SNAPSHOT_PATH", str(snapshot_path))
         bundled_model_dir = bundled_resource("insightface_models")
         if bundled_model_dir.exists():

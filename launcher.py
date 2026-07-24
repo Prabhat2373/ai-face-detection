@@ -105,6 +105,12 @@ def ensure_venv_interpreter() -> None:
 # Ensure we run under project's virtualenv Python (if available) as early as possible.
 ensure_venv_interpreter()
 
+try:
+    from python_recognizer.store import get_canonical_db_path
+    os.environ["PYTHON_DB_PATH"] = str(get_canonical_db_path())
+except Exception:
+    pass
+
 
 # Backend helpers
 try:

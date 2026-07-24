@@ -13,12 +13,34 @@ import math
 import os
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Canonical Database Path Resolution (Unified Single DB Path)
+# ---------------------------------------------------------------------------
+
+def get_canonical_db_path() -> Path:
+    env_path = os.getenv("PYTHON_DB_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+
+    if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            base_dir = Path.home() / "Library" / "Application Support" / "FaceAgent"
+        elif sys.platform == "win32":
+            base_dir = Path(os.getenv("APPDATA", Path.home() / "AppData" / "Roaming")) / "FaceAgent"
+        else:
+            base_dir = Path.home() / ".local" / "share" / "FaceAgent"
+        return base_dir / "data" / "app.db"
+
+    project_root = Path(__file__).resolve().parent.parent
+    return project_root / "python_recognizer" / "data" / "app.db"
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +680,13 @@ class SQLiteStore:
                            SELECT GROUP_CONCAT(ed.department_id)
                            FROM employee_departments ed
                            WHERE ed.employee_id = e.employee_id
-                       ) AS department_ids
+                       ) AS department_ids,
+                       (
+                           SELECT GROUP_CONCAT(d.name)
+                           FROM employee_departments ed
+                           JOIN departments d ON d.id = ed.department_id
+                           WHERE ed.employee_id = e.employee_id
+                       ) AS department_names
                 FROM known_faces f
                 JOIN face_embeddings e ON e.label = f.label
                 LEFT JOIN employees emp ON emp.id = e.employee_id
@@ -678,13 +706,17 @@ class SQLiteStore:
                 group_key = employee_id or stored_label
                 if group_key not in grouped:
                     grouped[group_key] = (label, [], updated_at)
-                department_ids = [item for item in str(row["department_ids"] or "").split(",") if item]
+
+                raw_ids = [item.strip() for item in str(row["department_ids"] or "").split(",") if item.strip()]
+                raw_names = [item.strip() for item in str(row["department_names"] or "").split(",") if item.strip()]
+                department_tokens = sorted(set(raw_ids + raw_names))
+
                 employee_active = bool(row["employee_active"]) if row["employee_active"] is not None else True
-                grouped[group_key][1].append((embedding, employee_id, department_ids, employee_active))
+                grouped[group_key][1].append((embedding, employee_id, department_tokens, employee_active))
             result: list[tuple[str, Any, str, int, str | None, list[str], bool]] = []
             for _group_key, (label, embeddings, updated_at) in grouped.items():
-                for embedding, employee_id, department_ids, employee_active in embeddings:
-                    result.append((label, embedding, updated_at, len(embeddings), employee_id, department_ids, employee_active))
+                for embedding, employee_id, department_tokens, employee_active in embeddings:
+                    result.append((label, embedding, updated_at, len(embeddings), employee_id, department_tokens, employee_active))
             return result
 
     # ── Attendance ──────────────────────────────────────────────────────

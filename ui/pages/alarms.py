@@ -141,8 +141,8 @@ class AlarmsPage(QWidget):
     def _fetch_unknown_alarms(self):
         """Fetch unknown person alarm events from the database."""
         events = []
-        sync_rows = self.db.list_alarm_events(100)
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        sync_rows = self.db.list_alarm_events(250)
+        today_str = datetime.now().astimezone().strftime("%Y-%m-%d")
 
         for row in sync_rows:
             event_type = row.get("event_type", "")
@@ -163,17 +163,17 @@ class AlarmsPage(QWidget):
             snapshot_path = snapshot.get("path")
             ts = row.get("created_at") or payload.get("timestamp") or ""
 
-            # Check if today
+            # Check if today using local timezone
             is_today = False
             if ts:
                 try:
-                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-                    is_today = dt.astimezone().strftime("%Y-%m-%d") == today_str
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone()
+                    is_today = dt.strftime("%Y-%m-%d") == today_str
                 except Exception:
-                    is_today = ts[:10] == today_str
+                    is_today = str(ts)[:10] == today_str
 
             events.append({
-                "id": row.get("id"),
+                "id": int(row.get("id") or 0),
                 "camera": camera,
                 "timestamp": ts,
                 "is_today": is_today,
@@ -182,7 +182,8 @@ class AlarmsPage(QWidget):
                 "status": "Triggered",
             })
 
-        events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+        # Sort by primary key ID descending so newest inserted alarm is strictly first
+        events.sort(key=lambda e: int(e.get("id") or 0), reverse=True)
         return events
 
     def refresh(self):
