@@ -37,6 +37,7 @@ from .pages.employees import EmployeesPage
 from .pages.cameras import CamerasPage
 from .pages.departments import DepartmentsPage
 from .pages.alarms import AlarmsPage
+from .pages.reports import ReportsPage
 
 from .widgets import NavButton
 from .database import Database
@@ -48,6 +49,7 @@ NAV_ITEMS = [
     ("dashboard", "Dashboard", "overview"),
     ("employees", "Employees", "overview"),
     ("departments", "Departments", "overview"),
+    ("reports", "Reports", "overview"),
     ("cameras", "Cameras", "master"),
     ("attendance", "Attendance", "master"),
     ("alarms", "Alarms", "master"),
@@ -118,7 +120,7 @@ class Sidebar(QFrame):
         # Groups and their keys
         sections = [
             ("", ["live"]),
-            ("OVERVIEW", ["dashboard", "employees", "departments"]),
+            ("OVERVIEW", ["dashboard", "employees", "departments", "reports"]),
             ("MASTER", ["cameras", "attendance", "alarms"]),
             # ("SYSTEM", []),
         ]
@@ -132,6 +134,7 @@ class Sidebar(QFrame):
             "dashboard": "dashboard.svg",
             "employees": "employees.svg",
             "departments": "departments.svg",
+            "reports": "reports.svg",
             "cameras": "cameras.svg",
             "attendance": "attendance.svg",
             "alarms": "alarms.svg",
@@ -333,6 +336,7 @@ class MainWindow(QMainWindow):
             "cameras": CamerasPage,
             "departments": DepartmentsPage,
             "alarms": AlarmsPage,
+            "reports": ReportsPage,
         }
 
         for key, page_class in pages_map.items():

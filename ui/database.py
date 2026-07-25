@@ -237,3 +237,66 @@ class Database:
         except Exception:
             pass
         self._store.clear_sync_events()
+
+    def get_reports_stats(self, date_str: str | None = None) -> dict:
+        conn = self._store.connection()
+        dept_stats = {}
+        hour_stats = {}
+        known_faces_count = 0
+        alarms_count = 0
+        try:
+            # 1. Attendance count per department
+            try:
+                dept_rows = conn.execute(
+                    "SELECT COALESCE(last_department_name, 'General') as name, COUNT(*) as c FROM attendance_records GROUP BY name"
+                ).fetchall()
+                dept_stats = {r["name"]: r["c"] for r in dept_rows}
+            except Exception:
+                pass
+
+            # 2. Hourly check-in activity (general distribution or specific date)
+            try:
+                if date_str:
+                    hour_rows = conn.execute(
+                        "SELECT strftime('%H', last_appearance) as hr, COUNT(*) as c FROM attendance_records WHERE attendance_date = ? GROUP BY hr",
+                        (date_str,)
+                    ).fetchall()
+                else:
+                    hour_rows = conn.execute(
+                        "SELECT strftime('%H', last_appearance) as hr, COUNT(*) as c FROM attendance_records GROUP BY hr"
+                    ).fetchall()
+                hour_stats = {}
+                for r in hour_rows:
+                    if r["hr"] is not None:
+                        hour_stats[int(r["hr"])] = r["c"]
+            except Exception:
+                pass
+
+            # 3. Known faces vs Alarms ratio
+            try:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(appearances), 0) as c FROM attendance_records"
+                ).fetchone()
+                if row:
+                    known_faces_count = row["c"]
+            except Exception:
+                pass
+
+            # Count of total alarms (from sync_events)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) as c FROM sync_events WHERE event_type = 'alarm.triggered'"
+                ).fetchone()
+                if row:
+                    alarms_count = row["c"]
+            except Exception:
+                pass
+
+            return {
+                "department_attendance": dept_stats,
+                "hourly_attendance": hour_stats,
+                "known_faces_count": known_faces_count,
+                "alarms_count": alarms_count,
+            }
+        finally:
+            conn.close()
