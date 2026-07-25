@@ -25,10 +25,14 @@ from __future__ import annotations
 
 import json
 import sys
+import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# Ensure the project root is on the path so we can import packages
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # PySide6 imports
 from PySide6.QtWidgets import (

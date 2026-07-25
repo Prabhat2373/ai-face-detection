@@ -325,11 +325,36 @@ class AlarmsPage(QWidget):
         dialog.exec()
 
     def _clear_events(self):
-        reply = QMessageBox.question(
-            self, "Clear Alarms",
-            "Are you sure you want to clear all unknown person alarms?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
+        box = QMessageBox(self)
+        box.setWindowTitle("Clear Alarms")
+        box.setText("Are you sure you want to clear all unknown person alarms?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        box.setIcon(QMessageBox.Question)
+        box.setStyleSheet("""
+            QMessageBox {
+                background: #f4f6fb;
+                color: #111827;
+            }
+            QMessageBox QLabel {
+                color: #111827;
+                font-size: 13px;
+            }
+            QMessageBox QPushButton {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #e5e7eb;
+                border-radius: 7px;
+                padding: 8px 18px;
+                min-width: 72px;
+                font-weight: 700;
+            }
+            QMessageBox QPushButton:hover {
+                border-color: #1a73e8;
+                background: #eef4ff;
+            }
+        """)
+        reply = box.exec()
         if reply == QMessageBox.Yes:
             try:
                 self.db.clear_sync_events()

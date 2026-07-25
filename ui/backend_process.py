@@ -70,6 +70,7 @@ class BackendProcess:
                 BACKEND_HOST,
                 "--port",
                 BACKEND_PORT,
+                "--no-access-log",
             ]
 
         log_handle = None

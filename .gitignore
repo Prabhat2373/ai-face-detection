@@ -44,6 +44,9 @@ build/  # already covered above
 logs/
 *.log
 *.sqlite3
+*.db
+*.db-shm
+*.db-wal
 *.db-journal
 
 # License tokens / private keys (do not commit keys)

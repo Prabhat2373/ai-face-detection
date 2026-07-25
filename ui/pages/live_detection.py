@@ -298,7 +298,12 @@ class LiveDetectionPage(QWidget):
         except Exception as exc:  # noqa: BLE001
             self._backend_status = {"state": "offline", "lastError": str(exc)}
 
-        state = str(self._backend_status.get("state") or "offline").title()
+        cameras = self.db.list_cameras()
+        enabled = [c for c in cameras if c.get("enabled")]
+        if not enabled:
+            state = "No Cameras"
+        else:
+            state = str(self._backend_status.get("state") or "offline").title()
         self._stat_state.set_value(state)
 
         camera_statuses = self._backend_status.get("cameras") or []

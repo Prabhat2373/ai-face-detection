@@ -57,6 +57,10 @@ def _add_data_if_exists(src: Path, dest: str) -> None:
 # Packaged database (if present)
 _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "data" / "app.db", os.path.join("python_recognizer", "data"))
 
+# Packaged sounds
+_add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "check_in.mp3", "python_recognizer")
+_add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "mixkit-data-scaner-2847.wav", "python_recognizer")
+
 # Licensing public key
 _add_data_if_exists(PROJECT_ROOT / "licenses" / "public_key.pem", "licenses")
 

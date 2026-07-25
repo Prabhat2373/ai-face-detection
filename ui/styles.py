@@ -380,6 +380,33 @@ QToolTip {{
     border-radius: 6px;
     padding: 6px 10px;
 }}
+
+QMessageBox {{
+    background-color: {surface};
+    background: {surface};
+    color: {text};
+}}
+
+QMessageBox QLabel {{
+    color: {text};
+    background-color: transparent;
+}}
+
+QMessageBox QPushButton {{
+    background-color: {surface};
+    color: {text};
+    border: 1px solid {line};
+    border-radius: 7px;
+    padding: 8px 18px;
+    min-width: 72px;
+    font-weight: 700;
+}}
+
+QMessageBox QPushButton:hover {{
+    border-color: {primary};
+    background-color: {soft};
+    background: {soft};
+}}
 """
 
 def build_stylesheet(mode: str = "light") -> str:

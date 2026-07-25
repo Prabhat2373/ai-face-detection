@@ -14,6 +14,7 @@ from PySide6.QtCore import QSize
 
 
 from ..database import Database
+from ..backend_client import BackendClient
 
 
 class CameraDialog(QDialog):
@@ -124,6 +125,7 @@ class CamerasPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.db = Database.get()
+        self.backend = BackendClient()
         self._build_ui()
         self.refresh()
 
@@ -320,6 +322,10 @@ class CamerasPage(QWidget):
         if dialog.exec():
             try:
                 self.db.save_camera(dialog.get_data())
+                try:
+                    self.backend.start()
+                except Exception:
+                    pass
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -331,6 +337,10 @@ class CamerasPage(QWidget):
         if dialog.exec():
             try:
                 self.db.save_camera(dialog.get_data())
+                try:
+                    self.backend.start()
+                except Exception:
+                    pass
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -340,14 +350,43 @@ class CamerasPage(QWidget):
             return
         cam_id = camera.get("id")
         name = camera.get("name", "Camera")
-        reply = QMessageBox.question(
-            self, "Delete Camera",
-            f"Are you sure you want to delete camera '{name}'?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete Camera")
+        box.setText(f"Are you sure you want to delete camera '{name}'?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        box.setIcon(QMessageBox.Question)
+        box.setStyleSheet("""
+            QMessageBox {
+                background: #f4f6fb;
+                color: #111827;
+            }
+            QMessageBox QLabel {
+                color: #111827;
+                font-size: 13px;
+            }
+            QMessageBox QPushButton {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #e5e7eb;
+                border-radius: 7px;
+                padding: 8px 18px;
+                min-width: 72px;
+                font-weight: 700;
+            }
+            QMessageBox QPushButton:hover {
+                border-color: #1a73e8;
+                background: #eef4ff;
+            }
+        """)
+        reply = box.exec()
         if reply == QMessageBox.Yes:
             try:
                 self.db.delete_camera(cam_id)
+                try:
+                    self.backend.start()
+                except Exception:
+                    pass
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))

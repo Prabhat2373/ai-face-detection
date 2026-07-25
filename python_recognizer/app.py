@@ -152,6 +152,7 @@ class FFmpegStream:
 
 class FaceEngine:
     def __init__(self) -> None:
+        import sys
         app_dir = Path(__file__).resolve().parent
         self.snapshot_path = Path(os.getenv("SNAPSHOT_PATH", str(app_dir / "snapshots"))).expanduser()
         db_path = get_canonical_db_path()
@@ -176,7 +177,11 @@ class FaceEngine:
         self.model_dir = os.getenv("INSIGHTFACE_MODEL_DIR") or str(
             Path.home() / ".cache" / "insightface"
         )
-        default_alarm = Path(__file__).resolve().with_name("alarm.wav")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            default_alarm = Path(meipass) / "python_recognizer" / "alarm.wav"
+        else:
+            default_alarm = Path(__file__).resolve().with_name("alarm.wav")
         downloads_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
         configured_alarm = os.getenv("ALARM_SOUND_PATH")
         self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else (default_alarm if default_alarm.exists() else downloads_alarm)
@@ -187,6 +192,18 @@ class FaceEngine:
         self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
         self.known_grace_ms = parse_int_env("KNOWN_GRACE_MS", 800)
         self.recognition_grace_ms = parse_int_env("RECOGNITION_GRACE_MS", 1_000)
+
+        # Check-in sound configuration
+        self.check_in_sound_enabled = os.getenv("CHECK_IN_SOUND_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        if meipass:
+            default_check_in_sound = Path(meipass) / "python_recognizer" / "check_in.mp3"
+        else:
+            default_check_in_sound = Path(__file__).resolve().with_name("check_in.mp3")
+        configured_check_in_sound = os.getenv("CHECK_IN_SOUND_PATH")
+        self.check_in_sound_path = Path(configured_check_in_sound).expanduser() if configured_check_in_sound else default_check_in_sound
+        self.check_in_sound_cooldown_ms = parse_int_env("CHECK_IN_SOUND_COOLDOWN_MS", 3000)
+        self._last_played_check_in_sound_at: dict[str, float] = {}
+
         self.sync_enabled = os.getenv("SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
@@ -336,8 +353,35 @@ class FaceEngine:
         camera_department_id: str | None = None,
     ) -> dict[str, Any]:
         tenant = tenant_id or self.default_tenant_id
+
+        # Optimize: Downscale high-resolution frames to a maximum dimension of 640px for fast inference.
+        # This keeps CPU usage extremely low while maintaining standard face detection accuracy.
+        max_dim = 640
+        h, w = image.shape[:2]
+        scale = 1.0
+        if max(h, w) > max_dim:
+            if w > h:
+                scale = max_dim / w
+                new_w, new_h = max_dim, int(h * scale)
+            else:
+                scale = max_dim / h
+                new_w, new_h = int(w * scale), max_dim
+            model_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            model_image = image
+
         with self._model_lock:
-            faces = self._model.get(image)
+            faces = self._model.get(model_image)
+
+        # Scale detection coordinates back to original image size
+        if scale != 1.0 and faces:
+            for face in faces:
+                if hasattr(face, "bbox") and face.bbox is not None:
+                    face.bbox = face.bbox / scale
+                if hasattr(face, "kps") and face.kps is not None:
+                    face.kps = face.kps / scale
+                if hasattr(face, "landmark") and face.landmark is not None:
+                    face.landmark = face.landmark / scale
 
         detected = [self._serialize_face(face, camera_department_id) for face in self._filter_faces(faces)]
         detected = self._stabilize_camera_faces(detected, camera_role, camera_id)
@@ -394,6 +438,15 @@ class FaceEngine:
         snapshot_path = str(snapshot.get("path")) if snapshot and snapshot.get("path") else None
         for face in known_faces:
             if face["match"] and face["match"].get("label"):
+                if self.check_in_sound_enabled:
+                    label = str(face["match"]["label"])
+                    now_ms = time.time() * 1000.0
+                    last_played = self._last_played_check_in_sound_at.get(label, 0.0)
+                    if now_ms - last_played >= self.check_in_sound_cooldown_ms:
+                        self._last_played_check_in_sound_at[label] = now_ms
+                        logger.warning("Triggering check-in sound for employee: %s", label)
+                        self._play_sound(self.check_in_sound_path)
+
                 self.store.record_attendance(
                     str(face["match"]["label"]),
                     float(face["match"]["confidence"]),
@@ -708,6 +761,8 @@ class FaceEngine:
             reader = threading.Thread(target=reader_loop, daemon=True)
             reader.start()
             try:
+                frame_counter = 0
+                current_dept_id = camera_department_id
                 while not stop_event.is_set():
                     if stream.process.poll() is not None:
                         exit_reason = self._drain_ffmpeg_stderr(stream, camera_id)
@@ -728,6 +783,30 @@ class FaceEngine:
                     if latest_frame is None:
                         time.sleep(0.01)
                         continue
+
+                    frame_counter += 1
+
+                    # 1. DB query throttling: check DB for camera changes only every 30 frames
+                    if frame_counter % 30 == 0:
+                        try:
+                            clean_cam_id = camera_id.split("::")[-1] if "::" in camera_id else camera_id
+                            current_cam = self.store.get_camera(clean_cam_id, self.default_tenant_id)
+                            current_dept_id = str(current_cam.get("department_id") or "") if current_cam else ""
+                        except Exception:
+                            pass
+
+                    # 2. Frame decimation: only execute neural network inference on 1 out of every 3 frames
+                    if frame_counter % 3 != 0:
+                        self._set_camera_frame_state(
+                            camera_id,
+                            running=True,
+                            last_state="streaming",
+                            latest_frame=latest_frame,
+                            last_error=None,
+                        )
+                        time.sleep(max(0.0, 1.0 / float(frame_rate)))
+                        continue
+
                     self._set_camera_frame_state(
                         camera_id,
                         running=True,
@@ -741,11 +820,6 @@ class FaceEngine:
                         time.sleep(0.005)
                         continue
                     try:
-                        # Dynamically query the database for this camera's department_id to handle real-time configuration changes immediately
-                        clean_cam_id = camera_id.split("::")[-1] if "::" in camera_id else camera_id
-                        current_cam = self.store.get_camera(clean_cam_id, self.default_tenant_id)
-                        current_dept_id = str(current_cam.get("department_id") or "") if current_cam else ""
-
                         result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
                         self._set_camera_frame_state(
                             camera_id,
@@ -1305,21 +1379,23 @@ class FaceEngine:
             ],
         )
 
-    def _play_alarm_sound(self) -> None:
-        if not self.alarm_enabled:
-            return
-
-        sound = self.alarm_sound_path
+    def _play_sound(self, sound: Path) -> None:
+        logger.warning("Attempting to play sound: %s", sound)
         if not sound.exists():
-            logger.warning("Alarm sound file not found: %s", sound)
+            logger.warning("Sound file not found: %s", sound)
             return
 
         try:
             if platform.system() == "Windows":
-                import winsound
-
-                winsound.PlaySound(str(sound), winsound.SND_FILENAME | winsound.SND_ASYNC)
-                return
+                if str(sound).lower().endswith(".mp3"):
+                    # PowerShell Media Player works for MP3 on Windows
+                    cmd = ["powershell", "-c", f"$m = New-Object -ComObject MediaPlayer.MediaPlayer; $m.Open('{str(sound)}'); $m.Play(); Start-Sleep -s 3"]
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                else:
+                    import winsound
+                    winsound.PlaySound(str(sound), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    return
 
             if shutil.which("afplay"):
                 subprocess.Popen(["afplay", str(sound)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1341,9 +1417,14 @@ class FaceEngine:
                 subprocess.Popen(["aplay", str(sound)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return
 
-            logger.warning("No system audio player found for alarm playback")
+            logger.warning("No system audio player found for sound playback")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to play alarm sound: %s", exc)
+            logger.warning("Failed to play sound: %s", exc)
+
+    def _play_alarm_sound(self) -> None:
+        if not self.alarm_enabled:
+            return
+        self._play_sound(self.alarm_sound_path)
 
     def _sync_loop(self) -> None:
         while not self._sync_stop.is_set():
