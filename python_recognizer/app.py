@@ -9,6 +9,14 @@ import platform
 import shutil
 import subprocess
 import logging
+
+# Limit thread counts for linear algebra and ONNX Runtime libraries to drastically reduce RAM allocations
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "2")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
+os.environ.setdefault("ONNXRUNTIME_ENGINE_THREAD_POOL_SIZE", "2")
 import threading
 import time
 from urllib.parse import quote
@@ -261,7 +269,12 @@ class FaceEngine:
 
     def _load_model(self) -> FaceAnalysis:
         providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
-        model = FaceAnalysis(name=self.model_name, root=self.model_dir, providers=providers)
+        model = FaceAnalysis(
+            name=self.model_name,
+            root=self.model_dir,
+            providers=providers,
+            allowed_modules=["detection", "recognition"],
+        )
         model.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.detection_threshold)
         return model
 
