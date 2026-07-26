@@ -30,17 +30,13 @@ def get_canonical_db_path() -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
-    if getattr(sys, "frozen", False):
-        if sys.platform == "darwin":
-            base_dir = Path.home() / "Library" / "Application Support" / "FaceAgent"
-        elif sys.platform == "win32":
-            base_dir = Path(os.getenv("APPDATA", Path.home() / "AppData" / "Roaming")) / "FaceAgent"
-        else:
-            base_dir = Path.home() / ".local" / "share" / "FaceAgent"
-        return base_dir / "data" / "app.db"
-
-    project_root = Path(__file__).resolve().parent.parent
-    return project_root / "python_recognizer" / "data" / "app.db"
+    if sys.platform == "darwin":
+        base_dir = Path.home() / "Library" / "Application Support" / "FaceAgent"
+    elif sys.platform == "win32":
+        base_dir = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "FaceAgent"
+    else:
+        base_dir = Path.home() / ".local" / "share" / "FaceAgent"
+    return base_dir / "data" / "app.db"
 
 
 # ---------------------------------------------------------------------------

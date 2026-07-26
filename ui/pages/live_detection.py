@@ -158,6 +158,10 @@ class LiveDetectionPage(QWidget):
         frame_interval_ms = max(50, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "100")))
         self._frame_timer.start(frame_interval_ms)
         self.refresh()
+        try:
+            self.backend.start()
+        except Exception:
+            pass
 
     def _build_ui(self):
         scroll = QScrollArea()
@@ -358,8 +362,8 @@ class LiveDetectionPage(QWidget):
     def _alert_for_unknown_faces(self, camera_statuses: list[dict]):
         now = int(time.time() * 1000)
         # Don't ring alarm if disabled in configuration
-        alarm_enabled_env = os.getenv("ALARM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-        if not alarm_enabled_env:
+        alarm_enabled = self.db.get_setting("ALARM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        if not alarm_enabled:
             return
 
         for camera in camera_statuses:

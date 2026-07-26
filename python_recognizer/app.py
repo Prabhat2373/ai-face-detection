@@ -879,7 +879,16 @@ class FaceEngine:
         return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
     def _spawn_ffmpeg_stream(self, rtsp_url: str, frame_rate: int, transport: str = "tcp") -> FFmpegStream | None:
-        ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg").strip() or "ffmpeg"
+        ffmpeg_path = os.getenv("FFMPEG_PATH", "").strip()
+        if not ffmpeg_path:
+            if shutil.which("ffmpeg"):
+                ffmpeg_path = "ffmpeg"
+            else:
+                try:
+                    import imageio_ffmpeg
+                    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                except ImportError:
+                    ffmpeg_path = "ffmpeg"
         max_dim = int(self.store.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
         args = [
             ffmpeg_path,
@@ -995,11 +1004,14 @@ class FaceEngine:
         process = stream.process
         try:
             if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=3)
-                except Exception:
+                if sys.platform == "win32":
                     process.kill()
+                else:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=0.5)
+                    except Exception:
+                        process.kill()
         finally:
             stream.extractor.reset()
 
