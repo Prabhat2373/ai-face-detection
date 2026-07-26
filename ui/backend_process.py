@@ -105,10 +105,6 @@ class BackendProcess:
     def _copy_initial_data(self, db_path: Path, snapshot_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.mkdir(parents=True, exist_ok=True)
-        if not db_path.exists():
-            bundled_db = bundled_resource("python_recognizer", "data", "app.db")
-            if bundled_db.exists():
-                shutil.copy2(bundled_db, db_path)
 
 
 def writable_app_dir() -> Path:

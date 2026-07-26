@@ -54,9 +54,6 @@ def _add_data_if_exists(src: Path, dest: str) -> None:
         # Be permissive in the spec: missing files simply won't be bundled.
         pass
 
-# Packaged database (if present)
-_add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "data" / "app.db", os.path.join("python_recognizer", "data"))
-
 # Packaged sounds
 _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "check_in.mp3", "python_recognizer")
 _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "mixkit-data-scaner-2847.wav", "python_recognizer")
@@ -107,7 +104,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="FaceAgent",
+    name="Otence Intelligence",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -124,7 +121,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="FaceAgent",
+    name="Otence Intelligence",
 )
 
 import sys
@@ -137,7 +134,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleDisplayName": "Otence Intelligence",
             "CFBundleName": "Otence Intelligence",
-            "CFBundleExecutable": "FaceAgent",
+            "CFBundleExecutable": "Otence Intelligence",
             "NSHighResolutionCapable": True,
         }
     )
