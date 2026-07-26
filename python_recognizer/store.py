@@ -256,6 +256,10 @@ class SQLiteStore:
                     updated_at TEXT NOT NULL,
                     UNIQUE(tenant_id, license_key)
                 );
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(conn, "cameras", "camera_role", "TEXT NOT NULL DEFAULT 'general'")
@@ -281,6 +285,28 @@ class SQLiteStore:
         existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+    # ── Settings ─────────────────────────────────────────────────────────
+
+    def get_setting(self, key: str, default: str) -> str:
+        with self._lock, self.connection() as conn:
+            try:
+                row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+                if row:
+                    return str(row["value"])
+            except Exception:
+                pass
+            return default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._lock, self.connection() as conn:
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, str(value)),
+                )
+            except Exception:
+                pass
 
     # ── Cameras ─────────────────────────────────────────────────────────
 

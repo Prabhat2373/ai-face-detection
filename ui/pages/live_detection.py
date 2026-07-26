@@ -372,11 +372,13 @@ class LiveDetectionPage(QWidget):
             if now - previous < self._alarm_cooldown_ms:
                 continue
             self._last_unknown_alarm_at[camera_id] = now
-            if self._alarm_sound and self._alarm_sound.isLoaded():
-                self._alarm_sound.stop()
-                self._alarm_sound.play()
-            else:
-                QApplication.beep()
+            alarm_enabled = self.db.get_setting("ALARM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+            if alarm_enabled:
+                if self._alarm_sound and self._alarm_sound.isLoaded():
+                    self._alarm_sound.stop()
+                    self._alarm_sound.play()
+                else:
+                    QApplication.beep()
 
     def _create_alarm_sound(self) -> QSoundEffect | None:
         configured = os.getenv("FACEAGENT_UI_ALARM_SOUND") or os.getenv("ALARM_SOUND_PATH")

@@ -38,6 +38,7 @@ from .pages.cameras import CamerasPage
 from .pages.departments import DepartmentsPage
 from .pages.alarms import AlarmsPage
 from .pages.reports import ReportsPage
+from .pages.settings import SettingsPage
 
 from .widgets import NavButton
 from .database import Database
@@ -53,6 +54,7 @@ NAV_ITEMS = [
     ("cameras", "Cameras", "master"),
     ("attendance", "Attendance", "master"),
     ("alarms", "Alarms", "master"),
+    ("settings", "Settings", "master"),
 ]
 
 
@@ -121,7 +123,7 @@ class Sidebar(QFrame):
         sections = [
             ("", ["live"]),
             ("OVERVIEW", ["dashboard", "employees", "departments", "reports"]),
-            ("MASTER", ["cameras", "attendance", "alarms"]),
+            ("MASTER", ["cameras", "attendance", "alarms", "settings"]),
             # ("SYSTEM", []),
         ]
 
@@ -337,6 +339,7 @@ class MainWindow(QMainWindow):
             "departments": DepartmentsPage,
             "alarms": AlarmsPage,
             "reports": ReportsPage,
+            "settings": SettingsPage,
         }
 
         for key, page_class in pages_map.items():

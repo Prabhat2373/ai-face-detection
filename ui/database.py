@@ -48,6 +48,12 @@ class Database:
             cls._instance = cls()
         return cls._instance
 
+    def get_setting(self, key: str, default: str) -> str:
+        return self._store.get_setting(key, default)
+
+    def set_setting(self, key: str, value: str) -> None:
+        self._store.set_setting(key, value)
+
     # ── Cameras ─────────────────────────────────────────────────────────
 
     def list_cameras(self) -> list[dict]:

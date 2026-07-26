@@ -186,7 +186,6 @@ class FaceEngine:
         configured_alarm = os.getenv("ALARM_SOUND_PATH")
         self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else (default_alarm if default_alarm.exists() else downloads_alarm)
         self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 10_000)
-        self.alarm_enabled = os.getenv("ALARM_ENABLED", os.getenv("ALARM_FLAG", "true")).lower() in {"1", "true", "yes", "on"}
         self.alarm_unknown_frames = parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 1)
         self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", self.detection_threshold)
         self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
@@ -251,6 +250,14 @@ class FaceEngine:
             self._sync_thread.start()
         if self.auto_start_detection:
             threading.Thread(target=self._auto_start_cameras, daemon=True).start()
+
+    @property
+    def alarm_enabled(self) -> bool:
+        fallback = os.getenv("ALARM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        db_val = self.store.get_setting("ALARM_ENABLED", None)
+        if db_val is not None:
+            return db_val.lower() in {"1", "true", "yes", "on"}
+        return fallback
 
     def _load_model(self) -> FaceAnalysis:
         providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
@@ -354,9 +361,9 @@ class FaceEngine:
     ) -> dict[str, Any]:
         tenant = tenant_id or self.default_tenant_id
 
-        # Optimize: Downscale high-resolution frames to a maximum dimension of 640px for fast inference.
+        # Optimize: Downscale high-resolution frames to a maximum dimension for fast inference.
         # This keeps CPU usage extremely low while maintaining standard face detection accuracy.
-        max_dim = 640
+        max_dim = int(self.store.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
         h, w = image.shape[:2]
         scale = 1.0
         if max(h, w) > max_dim:
@@ -422,7 +429,7 @@ class FaceEngine:
                     "snapshot": snapshot,
                 }
                 self.store.enqueue_sync_event("alarm.triggered", alarm_record)
-            if self.alarm_enabled and should_alarm:
+            if should_alarm:
                 self._trigger_alarm(
                     image,
                     camera_role,
@@ -873,6 +880,7 @@ class FaceEngine:
 
     def _spawn_ffmpeg_stream(self, rtsp_url: str, frame_rate: int, transport: str = "tcp") -> FFmpegStream | None:
         ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg").strip() or "ffmpeg"
+        max_dim = int(self.store.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
         args = [
             ffmpeg_path,
             "-hide_banner",
@@ -901,6 +909,8 @@ class FaceEngine:
             "-an",
             "-sn",
             "-dn",
+            "-vf",
+            f"scale={max_dim}:-1",
             "-q:v",
             "4",
             "-r",
