@@ -87,7 +87,11 @@ class BackendProcess:
             stdout = log_handle
             stderr = subprocess.STDOUT
 
-        self.process = subprocess.Popen(args, env=env, stdout=stdout, stderr=stderr)
+        popen_kwargs = {"env": env, "stdout": stdout, "stderr": stderr}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+
+        self.process = subprocess.Popen(args, **popen_kwargs)
         if log_handle is not None:
             log_handle.close()
         self._wait_until_ready()

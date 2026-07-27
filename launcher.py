@@ -413,7 +413,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         print("Launching Activation UI...")
         try:
-            proc = subprocess.Popen(cmd, env=env_act)
+            popen_kwargs = {"env": env_act}
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            proc = subprocess.Popen(cmd, **popen_kwargs)
             rc = proc.wait()
         except Exception as exc:
             print("Failed to launch Activation UI:", exc, file=sys.stderr)
@@ -478,7 +481,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     cmd = [sys.executable, "--ui"]
                     env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
                     env["FACEAGENT_LAUNCHER_MANAGED"] = "1"
-                    proc = subprocess.Popen(cmd, env=env)
+                    popen_kwargs = {"env": env}
+                    if sys.platform == "win32":
+                        popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                    proc = subprocess.Popen(cmd, **popen_kwargs)
                     exit_code = proc.wait()
                 except Exception as exc:
                     print("Failed to launch UI from frozen bundle:", exc, file=sys.stderr)

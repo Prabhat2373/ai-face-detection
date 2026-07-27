@@ -1046,8 +1046,11 @@ class FaceEngine:
             "mjpeg",
             "pipe:1",
         ]
+        popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "bufsize": 0}
+        if platform.system() == "Windows":
+            popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         try:
-            process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            process = subprocess.Popen(args, **popen_kwargs)
         except Exception as exc:  # noqa: BLE001
             logger.warning("FFmpeg spawn failed: %s", exc)
             return None
@@ -1588,7 +1591,10 @@ class FaceEngine:
                 if str(sound).lower().endswith(".mp3"):
                     # PowerShell Media Player works for MP3 on Windows
                     cmd = ["powershell", "-c", f"$m = New-Object -ComObject MediaPlayer.MediaPlayer; $m.Open('{str(sound)}'); $m.Play(); Start-Sleep -s 3"]
-                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    popen_kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                    if platform.system() == "Windows":
+                        popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                    subprocess.Popen(cmd, **popen_kwargs)
                     return
                 else:
                     import winsound
