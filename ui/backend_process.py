@@ -33,6 +33,8 @@ class BackendProcess:
     def start(self) -> None:
         if os.getenv("FACEAGENT_AUTO_START_BACKEND", "true").lower() not in {"1", "true", "yes", "on"}:
             return
+        if self.process is not None and self.process.poll() is None:
+            return
         if is_backend_ready():
             return
 
@@ -95,6 +97,7 @@ class BackendProcess:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+        self.process = None
 
     def _wait_until_ready(self) -> None:
         for _ in range(40):

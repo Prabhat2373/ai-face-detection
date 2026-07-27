@@ -15,6 +15,7 @@ from PySide6.QtCore import QSize
 
 from ..database import Database
 from ..backend_client import BackendClient
+from ..qt_workers import run_in_background
 
 
 class CameraDialog(QDialog):
@@ -322,10 +323,7 @@ class CamerasPage(QWidget):
         if dialog.exec():
             try:
                 self.db.save_camera(dialog.get_data())
-                try:
-                    self.backend.start()
-                except Exception:
-                    pass
+                run_in_background(self.backend.start)
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -337,10 +335,7 @@ class CamerasPage(QWidget):
         if dialog.exec():
             try:
                 self.db.save_camera(dialog.get_data())
-                try:
-                    self.backend.start()
-                except Exception:
-                    pass
+                run_in_background(self.backend.start)
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -383,10 +378,7 @@ class CamerasPage(QWidget):
         if reply == QMessageBox.Yes:
             try:
                 self.db.delete_camera(cam_id)
-                try:
-                    self.backend.start()
-                except Exception:
-                    pass
+                run_in_background(self.backend.start)
                 self.refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))

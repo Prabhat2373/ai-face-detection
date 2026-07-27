@@ -430,30 +430,53 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Launch the UI. Prefer subprocess running ui/app.py
     ui_script = PROJECT_ROOT / "ui" / "app.py"
     exit_code = 0
-    try:
-        if getattr(sys, "frozen", False):
-            # When frozen, try to launch UI by executing the same frozen binary without args
-            try:
-                print("Launching UI (frozen bundle) as new process...")
-                cmd = [sys.executable]
-                env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
-                proc = subprocess.Popen(cmd, env=env)
-                exit_code = proc.wait()
-            except Exception as exc:
-                print("Failed to launch UI from frozen bundle:", exc, file=sys.stderr)
-                exit_code = 3
-        else:
-            if not ui_script.exists():
-                # If UI script isn't found in source layout, bail out gracefully.
-                print("UI script not found; cannot launch UI.")
-                exit_code = 1
+    restart_marker = (writable_app_dir() / "restart-requested") if writable_app_dir else None
+    while True:
+        try:
+            if getattr(sys, "frozen", False):
+                try:
+                    print("Launching UI (frozen bundle) as new process...")
+                    cmd = [sys.executable]
+                    env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
+                    env["FACEAGENT_LAUNCHER_MANAGED"] = "1"
+                    proc = subprocess.Popen(cmd, env=env)
+                    exit_code = proc.wait()
+                except Exception as exc:
+                    print("Failed to launch UI from frozen bundle:", exc, file=sys.stderr)
+                    exit_code = 3
             else:
-                env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
-                exit_code = launch_ui_normal(ui_script, env)
-    finally:
-        # Keep the backend running as a background service even if the UI application is closed.
-        # This allows alarms and attendance tracking to remain active continuously in the background.
-        pass
+                if not ui_script.exists():
+                    print("UI script not found; cannot launch UI.")
+                    exit_code = 1
+                else:
+                    env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
+                    env["FACEAGENT_LAUNCHER_MANAGED"] = "1"
+                    exit_code = launch_ui_normal(ui_script, env)
+        finally:
+            restart_requested = bool(restart_marker and restart_marker.exists())
+            if restart_requested and restart_marker is not None:
+                try:
+                    restart_marker.unlink()
+                except OSError:
+                    pass
+            if started_backend and backend_proc is not None and (not restart_requested):
+                try:
+                    backend_proc.stop()
+                except Exception as exc:
+                    print(f"Warning: failed to stop backend cleanly: {exc}", file=sys.stderr)
+            if restart_requested:
+                print("Settings restart requested; reloading backend and UI...")
+                if started_backend and backend_proc is not None:
+                    backend_proc.stop()
+                backend_proc = BackendProcess() if BackendProcess is not None else None
+                if backend_proc is None:
+                    return 12
+                backend_proc.start()
+                started_backend = True
+                if not wait_until_backend_ready():
+                    print("Warning: restarted backend did not become healthy.", file=sys.stderr)
+                continue
+        break
 
     return int(exit_code or 0)
 

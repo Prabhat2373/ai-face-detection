@@ -8,8 +8,44 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox
 )
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
 from ..database import Database
+from ..backend_process import writable_app_dir
+
+
+PERFORMANCE_PROFILES = {
+    "low": {
+        "label": "Low memory (recommended for 8 GB laptops)",
+        "model": "buffalo_s",
+        "det_size": 320,
+        "max_dim": 360,
+        "stream_fps": 3,
+        "detection_fps": 1,
+        "auto_start": False,
+        "description": "Uses the least RAM and CPU. Starts cameras only when you press Start.",
+    },
+    "balanced": {
+        "label": "Balanced (recommended for most computers)",
+        "model": "buffalo_s",
+        "det_size": 480,
+        "max_dim": 480,
+        "stream_fps": 5,
+        "detection_fps": 1,
+        "auto_start": False,
+        "description": "Good recognition quality with moderate resource usage.",
+    },
+    "high": {
+        "label": "High accuracy (requires more RAM)",
+        "model": "buffalo_l",
+        "det_size": 640,
+        "max_dim": 640,
+        "stream_fps": 10,
+        "detection_fps": 2,
+        "auto_start": True,
+        "description": "Best recognition quality, but may be slow on 8 GB laptops.",
+    },
+}
 
 class SettingsPage(QWidget):
     """UI settings panel backed by SQLite database config table."""
@@ -39,7 +75,7 @@ class SettingsPage(QWidget):
         header_layout.setSpacing(4)
         title = QLabel("Settings")
         title.setProperty("class", "page-title")
-        desc = QLabel("Configure camera stream resolutions and alarm preferences")
+        desc = QLabel("Choose a simple performance profile for your computer")
         desc.setProperty("class", "page-desc")
         header_layout.addWidget(title)
         header_layout.addWidget(desc)
@@ -51,29 +87,23 @@ class SettingsPage(QWidget):
         form_layout.setContentsMargins(0, 0, 0, 0)
         form_layout.setSpacing(12)
 
-        # --- Camera & Stream Group ---
-        group_stream = QGroupBox("Camera Stream Options")
-        group_stream.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 12px; padding-top: 16px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
-        stream_layout = QFormLayout(group_stream)
+        # --- Performance Group ---
+        group_performance = QGroupBox("Performance Profile")
+        group_performance.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 12px; padding-top: 16px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
+        performance_layout = QFormLayout(group_performance)
 
-        self.detection_max_dim = QComboBox()
-        self.detection_max_dim.addItem("320px (Lowest - High Efficiency)", 320)
-        self.detection_max_dim.addItem("480px (Low - Medium-High Efficiency)", 480)
-        self.detection_max_dim.addItem("640px (Standard - Balanced)", 640)
-        self.detection_max_dim.addItem("960px (High - Resource-Intensive)", 960)
-        self.detection_max_dim.addItem("1280px (Highest - Heavy Load)", 1280)
-        
-        desc_label = QLabel(
-            "Note: Lower resolutions drastically improve processing speed, "
-            "reduce CPU usage/temperature, and allow you to run more concurrent cameras."
-        )
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #6b7280; font-size: 11px; margin-top: 2px;")
-        
-        stream_layout.addRow(QLabel("Max Image Dimension (DETECTION_IMAGE_MAX_DIM):"), self.detection_max_dim)
-        stream_layout.addRow(desc_label)
+        self.performance_profile = QComboBox()
+        for key, profile in PERFORMANCE_PROFILES.items():
+            self.performance_profile.addItem(profile["label"], key)
+        self.performance_profile.currentIndexChanged.connect(self._update_profile_description)
 
-        form_layout.addRow(group_stream)
+        self.profile_description = QLabel()
+        self.profile_description.setWordWrap(True)
+        self.profile_description.setStyleSheet("color: #6b7280; font-size: 11px; margin-top: 2px;")
+
+        performance_layout.addRow(QLabel("Computer performance:"), self.performance_profile)
+        performance_layout.addRow(self.profile_description)
+        form_layout.addRow(group_performance)
 
         # --- Alarms Group ---
         group_alarm = QGroupBox("Alarms")
@@ -113,15 +143,10 @@ class SettingsPage(QWidget):
 
     def refresh(self):
         """Read variables from DB settings and load them into UI widgets."""
-        try:
-            val = int(self.db.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
-        except ValueError:
-            val = 640
-        idx = self.detection_max_dim.findData(val)
-        if idx >= 0:
-            self.detection_max_dim.setCurrentIndex(idx)
-        else:
-            self.detection_max_dim.setCurrentIndex(2)
+        profile_key = self.db.get_setting("PERFORMANCE_PROFILE", "low").strip().lower()
+        profile_idx = self.performance_profile.findData(profile_key)
+        self.performance_profile.setCurrentIndex(profile_idx if profile_idx >= 0 else 0)
+        self._update_profile_description()
 
         alarm_val = self.db.get_setting("ALARM_ENABLED", "false").lower() == "true"
         self.alarm_enabled.setChecked(alarm_val)
@@ -129,16 +154,38 @@ class SettingsPage(QWidget):
     def on_save(self):
         """Write UI widget values to the DB settings."""
         try:
-            self.db.set_setting("DETECTION_IMAGE_MAX_DIM", str(self.detection_max_dim.currentData()))
+            profile_key = str(self.performance_profile.currentData())
+            profile = PERFORMANCE_PROFILES[profile_key]
+            self.db.set_setting("PERFORMANCE_PROFILE", profile_key)
+            self.db.set_setting("INSIGHTFACE_MODEL", profile["model"])
+            self.db.set_setting("INSIGHTFACE_DET_SIZE", str(profile["det_size"]))
+            self.db.set_setting("DETECTION_IMAGE_MAX_DIM", str(profile["max_dim"]))
+            self.db.set_setting("STREAM_FRAME_RATE", str(profile["stream_fps"]))
+            self.db.set_setting("FRAME_RATE", str(profile["detection_fps"]))
+            self.db.set_setting("AUTO_START_DETECTION", "true" if profile["auto_start"] else "false")
             self.db.set_setting("ALARM_ENABLED", "true" if self.alarm_enabled.isChecked() else "false")
+            restart_marker = writable_app_dir() / "restart-requested"
+            restart_marker.write_text("settings", encoding="utf-8")
             QMessageBox.information(
                 self, 
                 "Success", 
-                "Settings saved successfully!\n\nPlease restart the application to apply the changes."
+                "Settings saved successfully!\n\nThe application will now restart to load the new recognition profile."
             )
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Error",
                 f"Failed to write settings to database:\n{exc}"
             )
+
+    def _update_profile_description(self):
+        profile = PERFORMANCE_PROFILES.get(str(self.performance_profile.currentData()))
+        if not profile:
+            return
+        self.profile_description.setText(
+            f"{profile['description']}\n"
+            f"Model: {profile['model']}  •  Recognition: {profile['detection_fps']} FPS  •  Preview: {profile['stream_fps']} FPS"
+        )

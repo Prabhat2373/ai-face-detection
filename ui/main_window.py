@@ -14,6 +14,7 @@ Notes:
 from __future__ import annotations
 
 import os
+import sys
 from typing import Dict
 
 from PySide6.QtWidgets import (
@@ -345,7 +346,10 @@ class MainWindow(QMainWindow):
         for key, page_class in pages_map.items():
             try:
                 page = page_class()
-            except Exception:
+            except Exception as exc:
+                import traceback
+                print(f"Failed to create page '{key}': {exc}", file=sys.stderr)
+                traceback.print_exc()
                 # If a page fails to instantiate, create a minimal placeholder widget
                 page = QWidget()
             self._pages[key] = page

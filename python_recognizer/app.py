@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import logging
 
 # Limit thread counts for linear algebra and ONNX Runtime libraries to drastically reduce RAM allocations
@@ -133,6 +134,17 @@ def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.dot(left_vec, right_vec) / denominator)
 
 
+def parse_int_env_setting(store: SQLiteStore, name: str, default: int) -> int:
+    """Read an environment override first, then the persisted UI setting."""
+    raw = os.getenv(name)
+    if raw is None:
+        raw = store.get_setting(name, str(default))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class FaceSample:
     label: str
@@ -160,13 +172,13 @@ class FFmpegStream:
 
 class FaceEngine:
     def __init__(self) -> None:
-        import sys
         app_dir = Path(__file__).resolve().parent
         self.snapshot_path = Path(os.getenv("SNAPSHOT_PATH", str(app_dir / "snapshots"))).expanduser()
         db_path = get_canonical_db_path()
         self.store = SQLiteStore(db_path)
         self.default_tenant_id = normalize_tenant_id(os.getenv("DEFAULT_TENANT_ID", "default"))
         self.store.ensure_tenant(self.default_tenant_id, os.getenv("DEFAULT_TENANT_NAME", "Local Tenant"))
+        self._ensure_low_memory_defaults()
 
         self.match_threshold = parse_float_env(
             "PYTHON_MATCH_THRESHOLD",
@@ -177,11 +189,21 @@ class FaceEngine:
             parse_float_env("DETECTION_THRESHOLD", 0.65),
         )
         self.snapshot_cooldown_ms = parse_int_env("SNAPSHOT_COOLDOWN_MS", 10_000)
-        self.det_size = (
-            parse_int_env("INSIGHTFACE_DET_WIDTH", 640),
-            parse_int_env("INSIGHTFACE_DET_HEIGHT", 640),
+        # Settings saved by the desktop UI take precedence over environment
+        # defaults. Low-memory mode is the safe default for 8 GB machines.
+        configured_det_size = parse_int_env_setting(
+            self.store,
+            "INSIGHTFACE_DET_SIZE",
+            parse_int_env("INSIGHTFACE_DET_WIDTH", 320),
         )
-        self.model_name = os.getenv("INSIGHTFACE_MODEL", "buffalo_l")
+        self.det_size = (
+            configured_det_size,
+            parse_int_env("INSIGHTFACE_DET_HEIGHT", configured_det_size),
+        )
+        self.model_name = os.getenv(
+            "INSIGHTFACE_MODEL",
+            self.store.get_setting("INSIGHTFACE_MODEL", "buffalo_s"),
+        )
         self.model_dir = os.getenv("INSIGHTFACE_MODEL_DIR") or str(
             Path.home() / ".cache" / "insightface"
         )
@@ -227,7 +249,11 @@ class FaceEngine:
         self._camera_frames_lock = threading.RLock()
         self._camera_meta_cache: dict[str, dict[str, Any]] = {}
         self._registered_face_count = len(self.store.list_faces(self.default_tenant_id))
-        self.auto_start_detection = os.getenv("AUTO_START_DETECTION", "true").lower() in {"1", "true", "yes", "on"}
+        auto_start_value = self.store.get_setting(
+            "AUTO_START_DETECTION",
+            os.getenv("AUTO_START_DETECTION", "false"),
+        )
+        self.auto_start_detection = auto_start_value.lower() in {"1", "true", "yes", "on"}
         self._state = "idle"
         self._started_at: str | None = None
         self._stopped_at: str | None = None
@@ -258,6 +284,22 @@ class FaceEngine:
             self._sync_thread.start()
         if self.auto_start_detection:
             threading.Thread(target=self._auto_start_cameras, daemon=True).start()
+
+    def _ensure_low_memory_defaults(self) -> None:
+        """Create the first-run low-memory profile in the shared settings DB."""
+        if self.store.get_setting("PERFORMANCE_PROFILE", None) is not None:
+            return
+        defaults = {
+            "PERFORMANCE_PROFILE": "low",
+            "INSIGHTFACE_MODEL": "buffalo_s",
+            "INSIGHTFACE_DET_SIZE": "320",
+            "DETECTION_IMAGE_MAX_DIM": "360",
+            "STREAM_FRAME_RATE": "3",
+            "FRAME_RATE": "1",
+            "AUTO_START_DETECTION": "false",
+        }
+        for key, value in defaults.items():
+            self.store.set_setting(key, value)
 
     @property
     def alarm_enabled(self) -> bool:
@@ -344,8 +386,12 @@ class FaceEngine:
                 "snapshotPath": str(self.snapshot_path),
                 "detectionThreshold": self.detection_threshold,
                 "matchThreshold": self.match_threshold,
-                "frameRate": parse_int_env("FRAME_RATE", 2),
-                "streamFrameRate": parse_int_env("STREAM_FRAME_RATE", 10),
+                "frameRate": parse_int_env(
+                    "FRAME_RATE", parse_int_env_setting(self.store, "FRAME_RATE", 1)
+                ),
+                "streamFrameRate": parse_int_env(
+                    "STREAM_FRAME_RATE", parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 3)
+                ),
                 "cooldownMs": self.snapshot_cooldown_ms,
                 "recognitionBackend": "python",
                 "pythonRecognizerUrl": None,
@@ -729,6 +775,23 @@ class FaceEngine:
         thread.start()
 
     def _camera_worker_loop(self, camera: dict[str, Any], stop_event: threading.Event) -> None:
+        """Run one camera worker and keep unexpected errors recoverable."""
+        camera_id = str(camera.get("id") or "")
+        while not stop_event.is_set():
+            try:
+                self._run_camera_worker_loop(camera, stop_event)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Camera worker crashed: %s", {"cameraId": camera_id, "error": str(exc)})
+                self._set_camera_frame_state(
+                    camera_id,
+                    running=False,
+                    last_state="worker error; reconnecting",
+                    last_error=str(exc)[:500],
+                )
+                stop_event.wait(2.0)
+
+    def _run_camera_worker_loop(self, camera: dict[str, Any], stop_event: threading.Event) -> None:
         rtsp_url = self._normalize_rtsp_url(camera)
         if not rtsp_url:
             return
@@ -736,18 +799,20 @@ class FaceEngine:
         camera_role = str(camera.get("camera_role") or "general")
         camera_id = str(camera.get("id") or "")
         camera_department_id = str(camera.get("department_id") or "")
-        frame_rate = max(1, parse_int_env("STREAM_FRAME_RATE", 10))
+        frame_rate = max(1, parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 3))
         retry_delay = 1.0
         transport_cycle = ["tcp", "udp"]
         transport_index = 0
         consecutive_failures = 0
+        connected_since = 0.0
         while not stop_event.is_set():
             transport = transport_cycle[transport_index % len(transport_cycle)]
             stream = self._spawn_ffmpeg_stream(rtsp_url, frame_rate, transport)
             if stream is None:
                 consecutive_failures += 1
                 transport_index += 1
-                logger.warning("Failed to open RTSP stream: %s", {"cameraId": camera_id, "rtspUrl": rtsp_url, "transport": transport})
+                backoff = min(30.0, retry_delay * (2 ** min(consecutive_failures - 1, 5)))
+                logger.warning("Failed to open RTSP stream: %s", {"cameraId": camera_id, "transport": transport, "retryInSeconds": round(backoff, 1)})
                 self._set_camera_frame_state(
                     camera_id,
                     running=False,
@@ -755,9 +820,10 @@ class FaceEngine:
                     last_error="failed to open stream",
                 )
                 self._camera_alarm_state[camera_id]["suppress_alarm_until"] = time.time() * 1000.0 + min(60_000, 5_000 * consecutive_failures)
-                time.sleep(min(30.0, retry_delay * consecutive_failures))
+                stop_event.wait(backoff)
                 continue
 
+            connected_since = time.time()
             self._set_camera_frame_state(camera_id, running=True, last_state="stream connected", last_error=None)
             self._camera_alarm_state[camera_id]["suppress_alarm_until"] = time.time() * 1000.0 + 2_000
             latest_frame_box: dict[str, bytes | None] = {"frame": None}
@@ -780,17 +846,17 @@ class FaceEngine:
 
             reader = threading.Thread(target=reader_loop, daemon=True)
             reader.start()
+            exit_reason: str | None = None
             try:
                 frame_counter = 0
                 current_dept_id = camera_department_id
                 while not stop_event.is_set():
                     if stream.process.poll() is not None:
                         exit_reason = self._drain_ffmpeg_stderr(stream, camera_id)
-                        if exit_reason and "Host is down" in exit_reason:
-                            transport_index += 1
-                            consecutive_failures += 1
-                        else:
-                            consecutive_failures = 0
+                        consecutive_failures += 1
+                        transport_index += 1
+                        if connected_since and time.time() - connected_since >= 30.0:
+                            consecutive_failures = 1
                         self._set_camera_frame_state(
                             camera_id,
                             running=False,
@@ -815,8 +881,11 @@ class FaceEngine:
                         except Exception:
                             pass
 
-                    # 2. Frame decimation: only execute neural network inference on 1 out of every 3 frames
-                    if frame_counter % 3 != 0:
+                    # 2. Frame decimation: recognition runs at the configured
+                    # detection rate instead of processing every preview frame.
+                    detection_rate = max(1, parse_int_env_setting(self.store, "FRAME_RATE", 1))
+                    process_every = max(1, round(frame_rate / detection_rate))
+                    if frame_counter % process_every != 0:
                         self._set_camera_frame_state(
                             camera_id,
                             running=True,
@@ -857,7 +926,13 @@ class FaceEngine:
                 reader.join(timeout=2)
                 self._set_camera_frame_state(camera_id, running=False, last_state="reconnecting")
                 self._camera_alarm_state[camera_id]["suppress_alarm_until"] = time.time() * 1000.0 + 3_000
-                time.sleep(min(10.0, retry_delay * max(1, consecutive_failures)))
+                backoff = min(30.0, retry_delay * (2 ** min(max(0, consecutive_failures - 1), 5)))
+                self._set_camera_frame_state(
+                    camera_id,
+                    last_state=f"reconnecting in {round(backoff, 1)}s",
+                    last_error=exit_reason or "stream stopped",
+                )
+                stop_event.wait(backoff)
 
     def _inject_rtsp_credentials(self, rtsp_url: str, username: str, password: str) -> str:
         try:
@@ -948,7 +1023,23 @@ class FaceEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("FFmpeg spawn failed: %s", exc)
             return None
+        if process.stderr is not None:
+            threading.Thread(
+                target=self._consume_ffmpeg_stderr,
+                args=(process.stderr,),
+                daemon=True,
+            ).start()
         return FFmpegStream(process=process, extractor=JpegFrameExtractor())
+
+    def _consume_ffmpeg_stderr(self, stderr: Any) -> None:
+        """Drain FFmpeg diagnostics so a noisy camera cannot block the pipe."""
+        try:
+            for raw_line in iter(stderr.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if line:
+                    logger.debug("FFmpeg: %s", line[-500:])
+        except Exception:
+            return
 
     def _set_camera_frame_state(
         self,

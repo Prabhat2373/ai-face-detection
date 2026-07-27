@@ -3,10 +3,11 @@
 from pathlib import Path
 
 
-model_dir = Path.home() / ".cache" / "insightface" / "models" / "buffalo_l"
 model_datas = []
-if model_dir.exists():
-    model_datas.append((str(model_dir), "insightface_models/models/buffalo_l"))
+for model_name in ("buffalo_s", "buffalo_l"):
+    model_dir = Path.home() / ".cache" / "insightface" / "models" / model_name
+    if model_dir.exists():
+        model_datas.append((str(model_dir), f"insightface_models/models/{model_name}"))
 
 ffmpeg_runtime = Path("build/ffmpeg-runtime")
 ffmpeg_datas = [(str(ffmpeg_runtime), "ffmpeg_runtime")] if ffmpeg_runtime.exists() else []

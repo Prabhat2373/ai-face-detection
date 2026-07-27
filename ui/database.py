@@ -168,16 +168,8 @@ class Database:
     # ── Attendance ──────────────────────────────────────────────────────
 
     def list_attendance(self, attendance_date: str | None = None) -> list[dict]:
-        # Try fetching live attendance from running FastAPI backend API first (same endpoint as admin.html)
-        try:
-            from ui.backend_client import BackendClient
-            client = BackendClient(timeout=2.0)
-            live_records = client.get_attendance(attendance_date)
-            if live_records:
-                return live_records
-        except Exception:
-            pass
-
+        # The desktop UI and local backend share the same SQLite database.
+        # Read locally here so page refresh timers never block on HTTP.
         records = self._store.list_attendance(_DEFAULT_TENANT)
         if attendance_date:
             matched = []
@@ -224,24 +216,9 @@ class Database:
         return self._store.list_all_sync_events(limit)
 
     def list_alarm_events(self, limit: int = 100) -> list[dict]:
-        # Try fetching live unknown face alarms directly from backend API first
-        try:
-            from ui.backend_client import BackendClient
-            client = BackendClient(timeout=2.0)
-            live_alarms = client.get_alarms(limit)
-            if live_alarms:
-                return live_alarms
-        except Exception:
-            pass
         return self._store.list_alarm_events(limit)
 
     def clear_sync_events(self) -> None:
-        try:
-            from ui.backend_client import BackendClient
-            client = BackendClient(timeout=2.0)
-            client.clear_alarms()
-        except Exception:
-            pass
         self._store.clear_sync_events()
 
     def get_reports_stats(self, date_str: str | None = None) -> dict:

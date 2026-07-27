@@ -15,6 +15,7 @@ from typing import Optional
 from ..widgets import SectionHeader, EmptyState, get_edit_icon, get_delete_icon, PaginationWidget, render_empty_table_placeholder
 from ..database import Database
 from ..backend_client import BackendClient
+from ..qt_workers import run_in_background
 
 
 class EmployeeDialog(QDialog):
@@ -411,11 +412,11 @@ class EmployeesPage(QWidget):
         dialog = EmployeeDialog(parent=self)
         if dialog.exec():
             data = dialog.get_data()
-            try:
-                self._persist_employee(data)
-                self.refresh()
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not save employee: {e}")
+            run_in_background(
+                lambda: self._persist_employee(data),
+                on_result=lambda _result: self.refresh(),
+                on_error=lambda exc: QMessageBox.warning(self, "Error", f"Could not save employee: {exc}"),
+            )
 
     def _employee_by_row(self, row: int) -> Optional[dict]:
         if row < 0 or row >= self._table.rowCount():
@@ -489,11 +490,11 @@ class EmployeesPage(QWidget):
         dialog = EmployeeDialog(employee, self)
         if dialog.exec():
             data = dialog.get_data()
-            try:
-                self._persist_employee(data)
-                self.refresh()
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not update employee: {e}")
+            run_in_background(
+                lambda: self._persist_employee(data),
+                on_result=lambda _result: self.refresh(),
+                on_error=lambda exc: QMessageBox.warning(self, "Error", f"Could not update employee: {exc}"),
+            )
 
     def _edit_selected(self):
         employee = self._employee_by_row(self._table.currentRow())

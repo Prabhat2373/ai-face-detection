@@ -15,6 +15,7 @@ from PySide6.QtMultimedia import QSoundEffect
 from ..widgets import StatCard, SectionHeader, Pill, EmptyState
 from ..backend_client import BackendClient
 from ..database import Database
+from ..qt_workers import run_in_background
 
 
 class CameraFeedWidget(QFrame):
@@ -147,9 +148,17 @@ class LiveDetectionPage(QWidget):
         self._feed_widgets: dict[str, CameraFeedWidget] = {}
         self._camera_signature = ""
         self._last_unknown_alarm_at: dict[str, int] = {}
+        self._status_request_active = False
+        self._start_request_active = False
+        self._last_start_attempt_ms = 0
+        self._frame_requests_active: set[str] = set()
         self._alarm_cooldown_ms = max(500, int(os.getenv("FACEAGENT_UI_ALARM_COOLDOWN_MS", "5000")))
         self._alarm_sound = self._create_alarm_sound()
         self._build_ui()
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setInterval(2000)
+        self._startup_timer.timeout.connect(self._ensure_detection_started)
+        self._startup_timer.start()
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_backend_status)
         self._refresh_timer.start(1000)
@@ -158,10 +167,7 @@ class LiveDetectionPage(QWidget):
         frame_interval_ms = max(50, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "100")))
         self._frame_timer.start(frame_interval_ms)
         self.refresh()
-        try:
-            self.backend.start()
-        except Exception:
-            pass
+        QTimer.singleShot(1500, self._ensure_detection_started)
 
     def _build_ui(self):
         scroll = QScrollArea()
@@ -297,10 +303,53 @@ class LiveDetectionPage(QWidget):
             self._refresh_frames()
 
     def _refresh_backend_status(self):
-        try:
-            self._backend_status = self.backend.status()
-        except Exception as exc:  # noqa: BLE001
+        if self._status_request_active:
+            return
+        self._status_request_active = True
+
+        def on_status(status):
+            self._backend_status = status
+            self._render_backend_status()
+
+        def on_error(exc):
             self._backend_status = {"state": "offline", "lastError": str(exc)}
+            self._render_backend_status()
+
+        run_in_background(
+            self.backend.status,
+            on_result=on_status,
+            on_error=on_error,
+            on_finished=lambda: setattr(self, "_status_request_active", False),
+        )
+
+    def _ensure_detection_started(self):
+        """Retry startup after the backend has finished loading its model."""
+        if self._start_request_active:
+            return
+        cameras = [camera for camera in self.db.list_cameras() if camera.get("enabled")]
+        state = str(self._backend_status.get("state") or "").lower()
+        now = int(time.time() * 1000)
+        if not cameras or state in {"running", "starting"} or now - self._last_start_attempt_ms < 3000:
+            return
+        self._start_request_active = True
+        self._last_start_attempt_ms = now
+        self._backend_status = {
+            **self._backend_status,
+            "state": "starting",
+        }
+        self._render_backend_status()
+        run_in_background(
+            self.backend.start,
+            on_result=lambda _result: self._on_detection_started(),
+            on_error=lambda exc: self._show_backend_error(exc),
+            on_finished=lambda: setattr(self, "_start_request_active", False),
+        )
+
+    def _on_detection_started(self):
+        self._startup_timer.stop()
+        self._refresh_backend_status()
+
+    def _render_backend_status(self):
 
         cameras = self.db.list_cameras()
         enabled = [c for c in cameras if c.get("enabled")]
@@ -356,8 +405,16 @@ class LiveDetectionPage(QWidget):
         if not self._feed_widgets:
             return
         for camera_id, feed in self._feed_widgets.items():
-            frame = self.backend.frame(camera_id=camera_id)
-            feed.set_frame(frame, self._camera_faces(camera_id))
+            if camera_id in self._frame_requests_active:
+                continue
+            self._frame_requests_active.add(camera_id)
+            run_in_background(
+                lambda camera_id=camera_id: self.backend.frame(camera_id=camera_id),
+                on_result=lambda frame, camera_id=camera_id, feed=feed: feed.set_frame(
+                    frame, self._camera_faces(camera_id)
+                ),
+                on_finished=lambda camera_id=camera_id: self._frame_requests_active.discard(camera_id),
+            )
 
     def _alert_for_unknown_faces(self, camera_statuses: list[dict]):
         now = int(time.time() * 1000)
@@ -399,20 +456,22 @@ class LiveDetectionPage(QWidget):
 
     def _start_detection(self):
         camera_id = self.camera_selector.currentData()
-        try:
-            self.backend.start(camera_id=camera_id)
-            self.refresh()
-        except Exception as exc:  # noqa: BLE001
-            self._stat_state.set_value("Offline")
-            self._faces_label.setText(f"Backend not reachable: {exc}")
+        run_in_background(
+            lambda: self.backend.start(camera_id=camera_id),
+            on_result=lambda _result: self.refresh(),
+            on_error=self._show_backend_error,
+        )
 
     def _stop_detection(self):
-        try:
-            self.backend.stop()
-            self.refresh()
-        except Exception as exc:  # noqa: BLE001
-            self._stat_state.set_value("Offline")
-            self._faces_label.setText(f"Backend not reachable: {exc}")
+        run_in_background(
+            self.backend.stop,
+            on_result=lambda _result: self.refresh(),
+            on_error=self._show_backend_error,
+        )
+
+    def _show_backend_error(self, exc: Exception):
+        self._stat_state.set_value("Offline")
+        self._faces_label.setText(f"Backend not reachable: {exc}")
 
     def _clear_layout(self, layout):
         while layout.count():
