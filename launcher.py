@@ -437,7 +437,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             if getattr(sys, "frozen", False):
                 try:
                     print("Launching UI (frozen bundle) as new process...")
-                    cmd = [sys.executable]
+                    cmd = [sys.executable, "--ui"]
                     env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
                     env["FACEAGENT_LAUNCHER_MANAGED"] = "1"
                     proc = subprocess.Popen(cmd, env=env)

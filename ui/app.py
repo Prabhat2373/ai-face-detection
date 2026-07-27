@@ -125,6 +125,12 @@ def main():
         # Return a non-zero code on cancel so the launcher can detect it.
         sys.exit(rc)
 
+    if "--ui" in sys.argv:
+        try:
+            sys.argv.remove("--ui")
+        except ValueError:
+            pass
+
     # Normal application startup: start backend (if auto-started) and show UI
     backend = None
     # Respect env/flags to avoid auto-start when managed externally by the launcher
