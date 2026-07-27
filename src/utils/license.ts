@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { mkdir } from "node:fs/promises";
+import { mkdir, chmod } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { env } from "../config/env.js";
 
@@ -58,6 +58,11 @@ export async function saveInstalledLicense(blob: LicenseBlob): Promise<string> {
   const filePath = getLicensePath();
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(blob, null, 2)}\n`, "utf8");
+  try {
+    await chmod(filePath, 0o600);
+  } catch {
+    // Windows does not support Unix file modes in the same way.
+  }
   return filePath;
 }
 

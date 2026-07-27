@@ -43,8 +43,10 @@ class BackendProcess:
 
         # Import unified canonical DB path resolver
         try:
-            from python_recognizer.store import get_canonical_db_path
-            db_path = get_canonical_db_path()
+            from python_recognizer.store import get_platform_db_path
+            # Desktop builds must always use this machine's own user data
+            # directory, even if PYTHON_DB_PATH was inherited from a dev shell.
+            db_path = get_platform_db_path()
         except Exception:
             db_path = writable_app_dir() / "data" / "app.db"
 

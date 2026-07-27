@@ -25,18 +25,24 @@ from typing import Any
 # Canonical Database Path Resolution (Unified Single DB Path)
 # ---------------------------------------------------------------------------
 
+def get_platform_data_dir() -> Path:
+    """Return the per-user writable data directory for this machine."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "FaceAgent"
+    if sys.platform == "win32":
+        return Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "FaceAgent"
+    return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "FaceAgent"
+
+
+def get_platform_db_path() -> Path:
+    return get_platform_data_dir() / "data" / "app.db"
+
+
 def get_canonical_db_path() -> Path:
     env_path = os.getenv("PYTHON_DB_PATH")
     if env_path:
         return Path(env_path).expanduser()
-
-    if sys.platform == "darwin":
-        base_dir = Path.home() / "Library" / "Application Support" / "FaceAgent"
-    elif sys.platform == "win32":
-        base_dir = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "FaceAgent"
-    else:
-        base_dir = Path.home() / ".local" / "share" / "FaceAgent"
-    return base_dir / "data" / "app.db"
+    return get_platform_db_path()
 
 
 # ---------------------------------------------------------------------------
@@ -126,13 +132,37 @@ class SQLiteStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._lock = threading.RLock()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._secure_path(self.db_path.parent, 0o700)
         self._ensure_schema()
+        self._secure_path(self.db_path, 0o600)
+
+    @staticmethod
+    def _secure_path(path: Path, mode: int) -> None:
+        if os.name != "nt":
+            try:
+                if path.exists():
+                    os.chmod(path, mode)
+            except OSError:
+                pass
 
     def connection(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
+
+    def backup_to(self, destination: Path) -> Path:
+        """Create a consistent SQLite backup, including active WAL content."""
+        destination = destination.expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, self.connection() as source, sqlite3.connect(destination) as target:
+            source.backup(target)
+        self._secure_path(destination.parent, 0o700)
+        self._secure_path(destination, 0o600)
+        return destination
 
     # ── Schema ──────────────────────────────────────────────────────────
 
@@ -256,6 +286,16 @@ class SQLiteStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_attendance_date
+                    ON attendance_records(attendance_date, last_appearance);
+                CREATE INDEX IF NOT EXISTS idx_attendance_label
+                    ON attendance_records(label);
+                CREATE INDEX IF NOT EXISTS idx_faces_employee
+                    ON face_embeddings(employee_id);
+                CREATE INDEX IF NOT EXISTS idx_sync_pending
+                    ON sync_events(synced_at, created_at);
+                CREATE INDEX IF NOT EXISTS idx_cameras_enabled
+                    ON cameras(enabled, camera_role);
                 """
             )
             self._ensure_column(conn, "cameras", "camera_role", "TEXT NOT NULL DEFAULT 'general'")
@@ -788,6 +828,7 @@ class SQLiteStore:
                     "appearances": 1,
                     "max_confidence": float(confidence),
                 }
+                attendance_accepted = True
             else:
                 try:
                     previous_last = datetime.fromisoformat(str(row["last_appearance"]).replace("Z", "+00:00"))
@@ -822,6 +863,7 @@ class SQLiteStore:
                     "appearances": appearances,
                     "max_confidence": max(float(row["max_confidence"]), float(confidence)),
                 }
+                attendance_accepted = appearances != int(row["appearances"])
             conn.execute(
                 """
                 INSERT INTO attendance_records (
@@ -865,6 +907,7 @@ class SQLiteStore:
                     record["last_confidence"], record["appearances"], record["max_confidence"],
                 ),
             )
+            record["_accepted"] = attendance_accepted
             return record
 
     def list_attendance(self, tenant_id: str = "default") -> list[dict[str, Any]]:

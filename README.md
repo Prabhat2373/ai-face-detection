@@ -55,6 +55,12 @@ Required variables:
 - `AGENT_VERSION`: Current edge agent version string.
 - `AUTO_UPDATE_URL`: Optional version-check endpoint for the updater.
 - `AUTO_UPDATE_INTERVAL_MS`: Update polling interval in milliseconds. Defaults to `60000`.
+- `SNAPSHOT_RETENTION_COUNT`: Maximum number of JPEG snapshots retained by the backend. Defaults to `5000`.
+- `MIN_FACE_SIZE`: Minimum detected face width and height used for recognition. Defaults to `40` pixels.
+- `BACKUP_ENABLED`: Enables automatic SQLite backups. Defaults to `true`.
+- `BACKUP_INTERVAL_SECONDS`: Time between automatic backups. Defaults to `86400` seconds.
+- `BACKUP_RETENTION_COUNT`: Number of recent database backups to keep. Defaults to `7`.
+- `BACKUP_PATH`: Optional backup directory. Defaults to the application data `backups` directory.
 
 ## Install
 
@@ -143,6 +149,7 @@ From npm:
 ```bash
 npm run db:clear -- --table cameras
 npm run db:wipe
+npm run db:backup
 ```
 
 ## Packaging

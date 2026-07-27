@@ -106,8 +106,9 @@ def ensure_venv_interpreter() -> None:
 ensure_venv_interpreter()
 
 try:
-    from python_recognizer.store import get_canonical_db_path
-    os.environ["PYTHON_DB_PATH"] = str(get_canonical_db_path())
+    from python_recognizer.store import get_platform_db_path
+    # Never carry a development machine's database path into a packaged build.
+    os.environ["PYTHON_DB_PATH"] = str(get_platform_db_path())
 except Exception:
     pass
 

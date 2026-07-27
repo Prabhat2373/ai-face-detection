@@ -174,8 +174,23 @@ class FaceEngine:
     def __init__(self) -> None:
         app_dir = Path(__file__).resolve().parent
         self.snapshot_path = Path(os.getenv("SNAPSHOT_PATH", str(app_dir / "snapshots"))).expanduser()
+        self.snapshot_retention_count = max(100, parse_int_env("SNAPSHOT_RETENTION_COUNT", 5000))
+        self.snapshot_path.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            try:
+                os.chmod(self.snapshot_path, 0o700)
+            except OSError:
+                pass
         db_path = get_canonical_db_path()
         self.store = SQLiteStore(db_path)
+        self.backup_enabled = os.getenv("BACKUP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        self.backup_interval_seconds = max(3600, parse_int_env("BACKUP_INTERVAL_SECONDS", 86_400))
+        self.backup_retention_count = max(1, parse_int_env("BACKUP_RETENTION_COUNT", 7))
+        self.backup_path = Path(
+            os.getenv("BACKUP_PATH", str(db_path.parent.parent / "backups"))
+        ).expanduser()
+        self._backup_stop = threading.Event()
+        self._backup_thread: threading.Thread | None = None
         self.default_tenant_id = normalize_tenant_id(os.getenv("DEFAULT_TENANT_ID", "default"))
         self.store.ensure_tenant(self.default_tenant_id, os.getenv("DEFAULT_TENANT_NAME", "Local Tenant"))
         self._ensure_low_memory_defaults()
@@ -241,6 +256,10 @@ class FaceEngine:
         self._sync_lock = threading.Lock()
         self._last_snapshot_at = 0.0
         self._model = self._load_model()
+        threading.Thread(target=self._cleanup_snapshots, daemon=True).start()
+        if self.backup_enabled:
+            self._backup_thread = threading.Thread(target=self._backup_loop, daemon=True)
+            self._backup_thread.start()
         self._sync_thread: threading.Thread | None = None
         self._sync_stop = threading.Event()
         self._camera_workers: dict[str, CameraWorker] = {}
@@ -337,6 +356,8 @@ class FaceEngine:
             "knownGraceMs": self.known_grace_ms,
             "recognitionGraceMs": self.recognition_grace_ms,
             "timestamp": iso_now(),
+            "backupEnabled": self.backup_enabled,
+            "backupPath": str(self.backup_path),
         }
 
     def status(self) -> dict[str, Any]:
@@ -449,7 +470,13 @@ class FaceEngine:
                 if hasattr(face, "landmark") and face.landmark is not None:
                     face.landmark = face.landmark / scale
 
-        detected = [self._serialize_face(face, camera_department_id) for face in self._filter_faces(faces)]
+        min_face_size = max(20, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 40))
+        quality_faces = []
+        for face in self._filter_faces(faces):
+            bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
+            if len(bbox) >= 4 and min(bbox[2] - bbox[0], bbox[3] - bbox[1]) >= min_face_size:
+                quality_faces.append(face)
+        detected = [self._serialize_face(face, camera_department_id) for face in quality_faces]
         detected = self._stabilize_camera_faces(detected, camera_role, camera_id)
         self._last_faces = detected
         self._detection_count += 1
@@ -513,7 +540,7 @@ class FaceEngine:
                         logger.warning("Triggering check-in sound for employee: %s", label)
                         self._play_sound(self.check_in_sound_path)
 
-                self.store.record_attendance(
+                attendance_record = self.store.record_attendance(
                     str(face["match"]["label"]),
                     float(face["match"]["confidence"]),
                     iso_now(),
@@ -526,21 +553,22 @@ class FaceEngine:
                     department_name,
                     snapshot_path,
                 )
-                self.store.enqueue_sync_event(
-                    "attendance.recorded",
-                    {
-                        "label": str(face["match"]["label"]),
-                        "confidence": float(face["match"]["confidence"]),
-                        "timestamp": iso_now(),
-                        "cameraRole": camera_role,
-                        "cameraId": camera_id,
-                        "cameraName": camera_name,
-                        "departmentId": effective_department_id or None,
-                        "departmentName": department_name,
-                        "snapshot": snapshot,
-                    },
-                    tenant,
-                )
+                if attendance_record.get("_accepted"):
+                    self.store.enqueue_sync_event(
+                        "attendance.recorded",
+                        {
+                            "label": str(face["match"]["label"]),
+                            "confidence": float(face["match"]["confidence"]),
+                            "timestamp": iso_now(),
+                            "cameraRole": camera_role,
+                            "cameraId": camera_id,
+                            "cameraName": camera_name,
+                            "departmentId": effective_department_id or None,
+                            "departmentName": department_name,
+                            "snapshot": snapshot,
+                        },
+                        tenant,
+                    )
         return {
             "state": state,
             "faces": detected,
@@ -1364,6 +1392,11 @@ class FaceEngine:
         ok = cv2.imwrite(str(path), annotated)
         if not ok:
             return None
+        if os.name != "nt":
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
         with self._snapshot_lock:
             self._last_snapshot_at = now_ms
         return {
@@ -1371,6 +1404,45 @@ class FaceEngine:
             "timestamp": iso_now(),
             "confidence": float(best_face.get("confidence") or 0.0),
         }
+
+    def _cleanup_snapshots(self) -> None:
+        """Keep snapshot storage bounded for long-running installations."""
+        try:
+            self.snapshot_path.mkdir(parents=True, exist_ok=True)
+            files = sorted(
+                (path for path in self.snapshot_path.glob("*.jpg") if path.is_file()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            for path in files[self.snapshot_retention_count:]:
+                try:
+                    path.unlink()
+                except OSError:
+                    logger.warning("Unable to remove old snapshot: %s", path.name)
+        except OSError as exc:
+            logger.warning("Snapshot retention cleanup failed: %s", exc)
+
+    def _backup_loop(self) -> None:
+        """Create a consistent backup immediately and then once per interval."""
+        while not self._backup_stop.is_set():
+            try:
+                self.backup_path.mkdir(parents=True, exist_ok=True)
+                filename = f"app-{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.db"
+                destination = self.store.backup_to(self.backup_path / filename)
+                backups = sorted(
+                    (path for path in self.backup_path.glob("app-*.db") if path.is_file()),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+                for old_backup in backups[self.backup_retention_count:]:
+                    try:
+                        old_backup.unlink()
+                    except OSError:
+                        logger.warning("Unable to remove old database backup: %s", old_backup.name)
+                logger.info("Database backup created: %s", destination)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Database backup failed: %s", exc)
+            self._backup_stop.wait(self.backup_interval_seconds)
 
     def _trigger_alarm(
         self,
