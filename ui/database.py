@@ -167,45 +167,32 @@ class Database:
 
     # ── Attendance ──────────────────────────────────────────────────────
 
-    def list_attendance(self, attendance_date: str | None = None) -> list[dict]:
-        # The desktop UI and local backend share the same SQLite database.
-        # Read locally here so page refresh timers never block on HTTP.
-        records = self._store.list_attendance(_DEFAULT_TENANT)
-        if attendance_date:
-            matched = []
-            for record in records:
-                rec_date = record.get("attendance_date")
-                if not rec_date and (record.get("last_appearance") or record.get("first_appearance")):
-                    ts = str(record.get("last_appearance") or record.get("first_appearance"))
-                    try:
-                        from datetime import datetime
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        rec_date = dt.astimezone().strftime("%Y-%m-%d")
-                    except Exception:
-                        rec_date = ts[:10]
-                if rec_date == attendance_date:
-                    matched.append(record)
-            return matched
-        return records
+    def list_attendance(self, attendance_date: str | None = None, limit: int | None = 2000) -> list[dict]:
+        return self._store.list_attendance(_DEFAULT_TENANT, attendance_date=attendance_date, limit=limit)
 
     def recent_attendance(self, limit: int = 10) -> list[dict]:
-        return self.list_attendance()[:limit]
+        return self.list_attendance(limit=limit)
 
     # ── Dashboard stats ─────────────────────────────────────────────────
 
     def dashboard_stats(self) -> dict:
-        cameras = self._store.list_cameras(_DEFAULT_TENANT)
-        departments = self._store.list_departments(_DEFAULT_TENANT)
-        employees = self._store.list_employees(_DEFAULT_TENANT)
-        faces = self._store.list_faces(_DEFAULT_TENANT)
-        attendance = self._store.list_attendance(_DEFAULT_TENANT)
-        return {
-            "active_cameras": sum(1 for c in cameras if c.get("enabled")),
-            "active_employees": sum(1 for e in employees if e.get("active")),
-            "departments": len(departments),
-            "known_faces": len(faces),
-            "total_attendance": len(attendance),
-        }
+        conn = self._store.connection()
+        try:
+            cameras = self._store.list_cameras(_DEFAULT_TENANT)
+            departments = self._store.list_departments(_DEFAULT_TENANT)
+            employees = self._store.list_employees(_DEFAULT_TENANT)
+            faces = self._store.list_faces(_DEFAULT_TENANT)
+            att_row = conn.execute("SELECT COUNT(*) as c FROM attendance_records").fetchone()
+            total_att = att_row["c"] if att_row else 0
+            return {
+                "active_cameras": sum(1 for c in cameras if c.get("enabled")),
+                "active_employees": sum(1 for e in employees if e.get("active")),
+                "departments": len(departments),
+                "known_faces": len(faces),
+                "total_attendance": total_att,
+            }
+        finally:
+            conn.close()
 
     # ── Sync events (used by alarms page) ───────────────────────────────
 

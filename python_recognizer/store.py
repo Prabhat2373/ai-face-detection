@@ -28,10 +28,10 @@ from typing import Any
 def get_platform_data_dir() -> Path:
     """Return the per-user writable data directory for this machine."""
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "FaceAgent"
+        return Path.home() / "Library" / "Application Support" / "OtenceIntelligence"
     if sys.platform == "win32":
-        return Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "FaceAgent"
-    return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "FaceAgent"
+        return Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "OtenceIntelligence"
+    return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "OtenceIntelligence"
 
 
 def get_platform_db_path() -> Path:
@@ -910,22 +910,31 @@ class SQLiteStore:
             record["_accepted"] = attendance_accepted
             return record
 
-    def list_attendance(self, tenant_id: str = "default") -> list[dict[str, Any]]:
+    def list_attendance(self, tenant_id: str = "default", attendance_date: str | None = None, limit: int | None = 2000) -> list[dict[str, Any]]:
+        tenant = normalize_tenant_id(tenant_id)
+        prefix = f"{tenant}::"
+        
+        query = "SELECT * FROM attendance_records WHERE (label LIKE ? OR (label NOT LIKE '%::%' AND ? = 'default'))"
+        params: list[Any] = [f"{prefix}%", tenant]
+        
+        if attendance_date:
+            query += " AND (attendance_date = ? OR last_appearance LIKE ? OR first_appearance LIKE ?)"
+            params.extend([attendance_date, f"{attendance_date}%", f"{attendance_date}%"])
+            
+        query += " ORDER BY last_appearance DESC LIMIT ?"
+        params.append(limit if limit is not None else 10000)
+        
         with self._lock, self.connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM attendance_records ORDER BY last_appearance DESC, label COLLATE NOCASE"
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
             results = []
-            prefix = f"{normalize_tenant_id(tenant_id)}::"
             for row in rows:
-                label = str(row["label"])
-                if label.startswith(prefix) or (normalize_tenant_id(tenant_id) == "default" and "::" not in label):
-                    payload = dict(row)
-                    display_label = payload.get("person_label")
-                    if not display_label:
-                        display_label = unscope_key(label, tenant_id).rsplit("::", 1)[0]
-                    payload["label"] = display_label
-                    results.append(payload)
+                payload = dict(row)
+                label = str(payload["label"])
+                display_label = payload.get("person_label")
+                if not display_label:
+                    display_label = unscope_key(label, tenant_id).rsplit("::", 1)[0]
+                payload["label"] = display_label
+                results.append(payload)
             return results
 
     # ── Sync Events ─────────────────────────────────────────────────────

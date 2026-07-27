@@ -241,25 +241,22 @@ class AttendancePage(QWidget):
         mode = self.date_scope.currentData() if hasattr(self, "date_scope") else "single"
         if mode == "all":
             self.date_input.setEnabled(False)
-            attendance_all = self.db.list_attendance(None)
+            attendance_all = self.db.list_attendance(None, limit=2000)
         else:
             self.date_input.setEnabled(True)
             sel_date = self.date_input.date().toString("yyyy-MM-dd")
-            attendance_all = self.db.list_attendance(sel_date)
+            attendance_all = self.db.list_attendance(sel_date, limit=2000)
             if not attendance_all and not getattr(self, "_has_auto_landed_date", False):
-                all_recs = self.db.list_attendance(None)
-                if all_recs:
-                    latest_rec = max(
-                        all_recs,
-                        key=lambda r: str(r.get("last_appearance") or r.get("first_appearance") or "")
-                    )
+                recent_recs = self.db.list_attendance(None, limit=1)
+                if recent_recs:
+                    latest_rec = recent_recs[0]
                     latest_ts = str(latest_rec.get("attendance_date") or latest_rec.get("last_appearance") or "")[:10]
                     if latest_ts and len(latest_ts) == 10:
                         self._has_auto_landed_date = True
                         self.date_input.blockSignals(True)
                         self.date_input.setDate(QDate.fromString(latest_ts, "yyyy-MM-dd"))
                         self.date_input.blockSignals(False)
-                        attendance_all = self.db.list_attendance(latest_ts)
+                        attendance_all = self.db.list_attendance(latest_ts, limit=2000)
 
         employees = self.db.list_employees()
         cameras = self.db.list_cameras()

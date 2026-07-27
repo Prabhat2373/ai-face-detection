@@ -244,6 +244,20 @@ class EmployeesPage(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
+        self.dept_filter = QComboBox()
+        self.dept_filter.addItem("All Departments", "")
+        self.dept_filter.setMinimumWidth(160)
+        self.dept_filter.currentIndexChanged.connect(self._filter_table)
+        try:
+            from PySide6.QtWidgets import QListView
+            self.dept_filter.setView(QListView())
+            view = self.dept_filter.view()
+            if view is not None:
+                view.setStyleSheet("background:#ffffff; color:#111827; selection-background-color:#e8f0fe; selection-color:#ffffff;")
+        except Exception:
+            pass
+        actions.addWidget(self.dept_filter)
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search employees...")
         self.search_input.setMinimumWidth(200)
@@ -330,7 +344,19 @@ class EmployeesPage(QWidget):
 
     def refresh(self):
         self._employees = self.db.list_employees()
-        self._populate_table(self._employees)
+        depts = self.db.list_departments()
+        cur_dept = self.dept_filter.currentData() if hasattr(self, "dept_filter") else None
+        self.dept_filter.blockSignals(True)
+        self.dept_filter.clear()
+        self.dept_filter.addItem("All Departments", "")
+        for d in depts:
+            self.dept_filter.addItem(d.get("name", ""), d.get("id"))
+        if cur_dept:
+            idx = self.dept_filter.findData(cur_dept)
+            if idx >= 0:
+                self.dept_filter.setCurrentIndex(idx)
+        self.dept_filter.blockSignals(False)
+        self._filter_table()
 
     def _populate_table(self, employees):
         self._filtered_employees = employees
@@ -357,17 +383,32 @@ class EmployeesPage(QWidget):
             self._table.setCellWidget(row_idx, 5, self._build_action_widget(emp))
             self._table.setItem(row_idx, 6, QTableWidgetItem(emp.get("id", "")))
 
-    def _filter_table(self, text):
+    def _filter_table(self, *args):
         if not hasattr(self, '_employees'):
             return
-        if not text.strip():
-            self._populate_table(self._employees)
-            return
-        filtered = [
-            e for e in self._employees
-            if text.lower() in e.get("name", "").lower()
-            or text.lower() in e.get("employee_code", "").lower()
-        ]
+        
+        filtered = list(self._employees)
+
+        # Department filter
+        selected_dept_id = self.dept_filter.currentData() if hasattr(self, "dept_filter") else None
+        if selected_dept_id:
+            filtered = [
+                e for e in filtered
+                if e.get("department_id") == selected_dept_id
+                or (isinstance(e.get("departments"), list) and selected_dept_id in e.get("departments"))
+            ]
+
+        # Text search
+        text = self.search_input.text().strip().lower() if hasattr(self, "search_input") else ""
+        if text:
+            filtered = [
+                e for e in filtered
+                if text in e.get("name", "").lower()
+                or text in e.get("employee_code", "").lower()
+                or text in e.get("role", "").lower()
+                or text in e.get("department_name", "").lower()
+            ]
+
         self._populate_table(filtered)
 
     def _persist_employee(self, data: dict):
