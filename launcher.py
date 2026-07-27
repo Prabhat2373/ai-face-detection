@@ -271,6 +271,21 @@ def set_license_env(env: dict, info: dict) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    if getattr(sys, "frozen", False):
+        try:
+            from python_recognizer.store import get_platform_data_dir
+            log_dir = get_platform_data_dir() / "logs"
+        except Exception:
+            log_dir = Path.home() / "AppData" / "Local" / "OtenceIntelligence" / "logs"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = open(log_dir / "launcher.log", "a", encoding="utf-8")
+            sys.stdout = log_file
+            sys.stderr = log_file
+            print(f"\n--- Application Started at {time.ctime()} ---")
+        except Exception:
+            pass
+
     argv = list(argv or sys.argv[1:])
     p = argparse.ArgumentParser(description="FaceAgent launcher (activation + normal startup)")
     p.add_argument("--no-backend", action="store_true")

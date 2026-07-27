@@ -1,0 +1,82 @@
+name: Build Windows Setup & macOS Installer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows (.exe setup)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r python_recognizer/requirements.txt
+          python -m pip install PySide6 pyinstaller cryptography
+
+      - name: Build PyInstaller bundle
+        run: |
+          python packaging/build_all.py --clean
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup -y
+
+      - name: Build Inno Setup Windows Installer (.exe)
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging/installer.iss
+
+      - name: Upload Windows Setup Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Otence_Intelligence_Windows_Setup
+          path: dist/Otence_Intelligence_Setup_v1.0.0.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (.dmg installer)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+          python3 -m pip install -r python_recognizer/requirements.txt
+          python3 -m pip install PySide6 pyinstaller cryptography
+
+      - name: Build PyInstaller bundle
+        run: |
+          python3 packaging/build_all.py --clean
+
+      - name: Package macOS DMG
+        run: |
+          mkdir -p dist/dmg
+          cp -R "dist/Otence Intelligence.app" dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "Otence Intelligence" -srcfolder dist/dmg -ov -format UDZO "dist/Otence_Intelligence_macOS.dmg"
+
+      - name: Upload macOS DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Otence_Intelligence_macOS_DMG
+          path: dist/Otence_Intelligence_macOS.dmg
+          if-no-files-found: error

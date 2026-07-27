@@ -82,13 +82,53 @@ if ico.exists():
 elif icns.exists():
     icon_file = str(icns)
 
+from PyInstaller.utils.hooks import collect_all
+
+hidden_modules = [
+    "uvicorn",
+    "uvicorn.logging",
+    "uvicorn.loops",
+    "uvicorn.loops.auto",
+    "uvicorn.protocols",
+    "uvicorn.protocols.http",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.lifespan",
+    "uvicorn.lifespan.on",
+    "insightface",
+    "insightface.app",
+    "insightface.model_zoo",
+    "onnxruntime",
+    "sqlite3",
+    "cryptography",
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtNetwork",
+    "python_recognizer.app",
+    "python_recognizer.store",
+]
+
+all_datas = list(datas)
+all_binaries = []
+all_hiddenimports = list(hidden_modules)
+
+for mod in ["uvicorn", "insightface", "onnxruntime"]:
+    try:
+        m_datas, m_binaries, m_hidden = collect_all(mod)
+        all_datas.extend(m_datas)
+        all_binaries.extend(m_binaries)
+        all_hiddenimports.extend(m_hidden)
+    except Exception:
+        pass
+
 # Analysis
 a = Analysis(
     [str(ENTRY_SCRIPT)],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
-    datas=datas,
-    hiddenimports=[],
+    binaries=all_binaries,
+    datas=all_datas,
+    hiddenimports=all_hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
