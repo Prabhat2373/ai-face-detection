@@ -286,6 +286,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         except Exception:
             pass
 
+    # Check for direct execution modes when running frozen executable
+    if "--backend" in sys.argv:
+        try:
+            from ui.app import run_backend
+            run_backend()
+            return 0
+        except Exception as exc:
+            print("Failed to run backend:", exc, file=sys.stderr)
+            return 1
+
+    if "--ui" in sys.argv:
+        try:
+            sys.argv.remove("--ui")
+        except ValueError:
+            pass
+        try:
+            from ui.app import main as ui_main
+            ui_main()
+            return 0
+        except Exception as exc:
+            print("Failed to run UI:", exc, file=sys.stderr)
+            return 1
+
     argv = list(argv or sys.argv[1:])
     p = argparse.ArgumentParser(description="FaceAgent launcher (activation + normal startup)")
     p.add_argument("--no-backend", action="store_true")
