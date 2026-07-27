@@ -52,11 +52,11 @@ try:
 except Exception:
     def writable_app_dir() -> Path:
         # Fallback for dev: use a per-user folder
-        return Path.home() / ".faceagent"
+        return Path.home() / ".otenceintelligence"
 
 
 DEFAULT_LICENSE_FILENAME = "license.key"
-DEFAULT_REQUEST_FILENAME = "FaceAgent_MachineRequest.json"
+DEFAULT_REQUEST_FILENAME = "OtenceIntelligence_MachineRequest.json"
 
 
 class LicenseDialog(QDialog):
@@ -64,12 +64,11 @@ class LicenseDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("FaceAgent Activation")
+        self.setWindowTitle("Otence Intelligence Activation")
         try:
-            # If project provides an icon resource, you can set it here.
-            icon_path = Path(__file__).resolve().parents[2] / "resources" / "icon.ico"
-            if icon_path.exists():
-                self.setWindowIcon(QIcon(str(icon_path)))
+            icon_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
         except Exception:
             pass
 

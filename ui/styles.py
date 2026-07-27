@@ -186,8 +186,9 @@ QPushButton[class="ghost"]:hover {{
 }}
 
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDateEdit {{
-    background: {surface};
-    border: 1px solid {line};
+    background-color: #ffffff;
+    background: #ffffff;
+    border: 1px solid #c3c9d6;
     border-radius: 7px;
     color: {text};
     padding: 10px 13px;
@@ -197,24 +198,49 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDateEdit {{
 }}
 
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover, QComboBox:hover, QSpinBox:hover, QDateEdit:hover {{
-    border-color: {input_hover};
+    border-color: #94a3b8;
 }}
 
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus {{
     border-color: {primary};
+    background-color: #ffffff;
+    background: #ffffff;
+}}
+
+QLineEdit {{
+    background-color: #ffffff;
+    background: #ffffff;
+    color: {text};
 }}
 
 QLineEdit::placeholder {{
-    color: {muted};
+    color: #8892b0;
 }}
 
 QComboBox QAbstractItemView {{
-    background-color: {surface};
-    background: {surface};
-    border: 1px solid {line};
-    color: {text};
+    background-color: #ffffff;
+    background: #ffffff;
+    border: 1px solid #c3c9d6;
+    color: #111827;
     selection-background-color: {primary};
     selection-color: #ffffff;
+}}
+
+QComboBox QAbstractItemView::item {{
+    background-color: #ffffff;
+    background: #ffffff;
+    color: #111827;
+    padding: 8px 12px;
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {selection};
+    color: #111827;
+}}
+
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {primary};
+    color: #ffffff;
 }}
 
 QComboBox::drop-down, QDateEdit::drop-down {{

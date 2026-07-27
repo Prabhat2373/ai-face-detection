@@ -124,18 +124,18 @@ class SettingsPage(QWidget):
         self.save_btn.setMinimumWidth(120)
         self.save_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:1px solid #1a73e8; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#1765cc; border-color:#1765cc; }")
         self.save_btn.clicked.connect(self.on_save)
-        
-        self.seed_btn = QPushButton("Seed Test Data")
-        self.seed_btn.setMinimumWidth(130)
-        self.seed_btn.setStyleSheet("QPushButton { background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#d1fae5; border-color:#059669; }")
-        self.seed_btn.clicked.connect(self.on_seed_data)
+
+        # self.seed_btn = QPushButton("Seed Test Data")
+        # self.seed_btn.setMinimumWidth(130)
+        # self.seed_btn.setStyleSheet("QPushButton { background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#d1fae5; border-color:#059669; }")
+        # self.seed_btn.clicked.connect(self.on_seed_data)
 
         self.reset_btn = QPushButton("Reset to Current")
         self.reset_btn.setMinimumWidth(120)
         self.reset_btn.setStyleSheet("QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
         self.reset_btn.clicked.connect(self.refresh)
 
-        btn_layout.addWidget(self.seed_btn)
+        # btn_layout.addWidget(self.seed_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(self.reset_btn)
         btn_layout.addWidget(self.save_btn)
@@ -173,8 +173,8 @@ class SettingsPage(QWidget):
             restart_marker = writable_app_dir() / "restart-requested"
             restart_marker.write_text("settings", encoding="utf-8")
             QMessageBox.information(
-                self, 
-                "Success", 
+                self,
+                "Success",
                 "Settings saved successfully!\n\nThe application will now restart to load the new recognition profile."
             )
             app = QApplication.instance()

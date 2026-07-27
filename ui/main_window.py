@@ -223,6 +223,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 720)
         self.resize(1440, 860)
 
+        # Set window icon explicitly
+        logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+        if os.path.exists(logo_path):
+            from PySide6.QtGui import QIcon
+            self.setWindowIcon(QIcon(logo_path))
+
         # Theme: kept for compatibility but theme toggle is hidden (styles enforce light)
         self._theme = "light"
 
