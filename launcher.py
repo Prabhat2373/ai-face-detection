@@ -504,11 +504,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     restart_marker.unlink()
                 except OSError:
                     pass
-            if started_backend and backend_proc is not None and (not restart_requested):
-                try:
-                    backend_proc.stop()
-                except Exception as exc:
-                    print(f"Warning: failed to stop backend cleanly: {exc}", file=sys.stderr)
             if restart_requested:
                 print("Settings restart requested; reloading backend and UI...")
                 if started_backend and backend_proc is not None:

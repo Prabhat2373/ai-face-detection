@@ -31,7 +31,7 @@ PERFORMANCE_PROFILES = {
         "det_size": 480,
         "max_dim": 480,
         "stream_fps": 5,
-        "detection_fps": 1,
+        "detection_fps": 3,
         "auto_start": False,
         "description": "Good recognition quality with moderate resource usage.",
     },
@@ -41,9 +41,19 @@ PERFORMANCE_PROFILES = {
         "det_size": 640,
         "max_dim": 640,
         "stream_fps": 10,
-        "detection_fps": 2,
+        "detection_fps": 4,
         "auto_start": True,
         "description": "Best recognition quality, but may be slow on 8 GB laptops.",
+    },
+    "very_high": {
+        "label": "Very High Accuracy (recommended for high-end PCs / GPUs)",
+        "model": "buffalo_l",
+        "det_size": 1080,
+        "max_dim": 1080,
+        "stream_fps": 15,
+        "detection_fps": 6,
+        "auto_start": True,
+        "description": "Maximum accuracy with large detection sizes and fast tracking. Requires dedicated hardware.",
     },
 }
 
@@ -93,6 +103,14 @@ class SettingsPage(QWidget):
         performance_layout = QFormLayout(group_performance)
 
         self.performance_profile = QComboBox()
+        try:
+            from PySide6.QtWidgets import QListView
+            self.performance_profile.setView(QListView())
+            view = self.performance_profile.view()
+            if view is not None:
+                view.setStyleSheet("background:#ffffff; color:#111827; selection-background-color:#e8f0fe; selection-color:#ffffff;")
+        except Exception:
+            pass
         for key, profile in PERFORMANCE_PROFILES.items():
             self.performance_profile.addItem(profile["label"], key)
         self.performance_profile.currentIndexChanged.connect(self._update_profile_description)
@@ -193,7 +211,7 @@ class SettingsPage(QWidget):
             return
         self.profile_description.setText(
             f"{profile['description']}\n"
-            f"Model: {profile['model']}  •  Recognition: {profile['detection_fps']} FPS  •  Preview: {profile['stream_fps']} FPS"
+            f" Recognition: {profile['detection_fps']} FPS  •  Preview: {profile['stream_fps']} FPS"
         )
 
     def on_seed_data(self):

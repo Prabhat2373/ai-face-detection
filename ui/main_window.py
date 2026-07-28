@@ -51,9 +51,9 @@ NAV_ITEMS = [
     ("dashboard", "Dashboard", "overview"),
     ("employees", "Employees", "overview"),
     ("departments", "Departments", "overview"),
-    ("reports", "Reports", "overview"),
+    ("reports", "Reports", "master"),
     ("cameras", "Cameras", "master"),
-    ("attendance", "Attendance", "master"),
+    ("attendance", "Attendance", "overview"),
     ("alarms", "Alarms", "master"),
     ("settings", "Settings", "master"),
 ]
@@ -123,8 +123,8 @@ class Sidebar(QFrame):
         # Groups and their keys
         sections = [
             ("", ["live"]),
-            ("OVERVIEW", ["dashboard", "employees", "departments", "reports"]),
-            ("MASTER", ["cameras", "attendance", "alarms", "settings"]),
+            ("OVERVIEW", ["dashboard", "employees", "departments", "attendance"]),
+            ("MASTER", ["cameras", "reports", "alarms", "settings"]),
             # ("SYSTEM", []),
         ]
 
