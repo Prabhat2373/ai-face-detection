@@ -538,8 +538,12 @@ class AttendancePage(QWidget):
             return str(iso_str)
 
     def _export_csv(self):
-        """Export visible rows to CSV with native Save File dialog."""
+        """Export all filtered rows to CSV with native Save File dialog."""
         try:
+            if not hasattr(self, "_filtered_records") or not self._filtered_records:
+                QMessageBox.warning(self, "Export", "No records found to export.")
+                return
+
             sel_date = self.date_input.date().toString("yyyy-MM-dd")
             default_filename = f"attendance-{sel_date}.csv"
 
@@ -553,24 +557,28 @@ class AttendancePage(QWidget):
                 return  # User cancelled the save dialog
 
             import csv
-            rows = []
-            for r in range(self._table.rowCount()):
-                name_cell = (self._table.item(r, 1).text() if self._table.item(r, 1) else "").replace("\n", " - ")
-                rows.append({
-                    "index": self._table.item(r, 0).text() if self._table.item(r, 0) else "",
-                    "name": name_cell,
-                    "department": self._table.item(r, 2).text() if self._table.item(r, 2) else "",
-                    "first": self._table.item(r, 3).text() if self._table.item(r, 3) else "",
-                    "last": self._table.item(r, 4).text() if self._table.item(r, 4) else "",
-                    "camera": self._table.item(r, 5).text() if self._table.item(r, 5) else "",
-                    "status": self._table.item(r, 6).text() if self._table.item(r, 6) else "",
-                    "confidence": self._table.item(r, 7).text() if self._table.item(r, 7) else "",
-                })
             with open(save_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["Index", "Name", "Department", "Check-In", "Check-Out", "Camera", "Status", "Confidence"])
-                for r in rows:
-                    writer.writerow([r["index"], r["name"], r["department"], r["first"], r["last"], r["camera"], r["status"], r["confidence"]])
+                writer.writerow(["Index", "Name", "Employee Code", "Department", "Check-In", "Check-Out", "Camera", "Status", "Confidence"])
+                for idx, rec in enumerate(self._filtered_records, start=1):
+                    name = rec.get("label") or ""
+                    code = rec.get("employee_code") or ""
+                    dept = rec.get("department") or ""
+                    first = self._format_dt(rec.get("first"))
+                    last = self._format_dt(rec.get("last"))
+                    cam = rec.get("camera") or "-"
+                    status = rec.get("status") or ""
+                    
+                    conf = rec.get("max_confidence")
+                    if conf is None:
+                        conf_text = "-"
+                    elif isinstance(conf, (int, float)):
+                        val = conf * 100.0 if conf <= 1.0 else conf
+                        conf_text = f"{val:.1f}%"
+                    else:
+                        conf_text = str(conf)
+
+                    writer.writerow([idx, name, code, dept, first, last, cam, status, conf_text])
 
             QMessageBox.information(
                 self,
