@@ -240,7 +240,8 @@ class SQLiteStore:
                     last_snapshot_path TEXT,
                     last_confidence REAL NOT NULL DEFAULT 0,
                     appearances INTEGER NOT NULL DEFAULT 0,
-                    max_confidence REAL NOT NULL DEFAULT 0
+                    max_confidence REAL NOT NULL DEFAULT 0,
+                    employee_code TEXT
                 );
                 CREATE TABLE IF NOT EXISTS sync_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,6 +317,7 @@ class SQLiteStore:
             self._ensure_column(conn, "attendance_records", "first_snapshot_path", "TEXT")
             self._ensure_column(conn, "attendance_records", "last_snapshot_path", "TEXT")
             self._ensure_column(conn, "attendance_records", "last_confidence", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "attendance_records", "employee_code", "TEXT")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
         existing = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -796,6 +798,7 @@ class SQLiteStore:
         department_id: str | None = None,
         department_name: str | None = None,
         snapshot_path: str | None = None,
+        employee_code: str | None = None,
     ) -> dict[str, Any]:
         role = camera_role if camera_role in {"general", "check_in", "check_out"} else "general"
         tenant = normalize_tenant_id(tenant_id)
@@ -827,6 +830,7 @@ class SQLiteStore:
                     "last_confidence": float(confidence),
                     "appearances": 1,
                     "max_confidence": float(confidence),
+                    "employee_code": employee_code,
                 }
                 attendance_accepted = True
             else:

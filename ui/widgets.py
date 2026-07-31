@@ -201,12 +201,12 @@ class Pill(QFrame):
     """A small colored pill/badge label."""
 
     COLORS = {
-        "running": ("rgba(34, 197, 94, 0.15)", "#86efac"),
-        "idle": ("rgba(148, 163, 184, 0.15)", "#cbd5e1"),
-        "error": ("rgba(248, 113, 113, 0.15)", "#fca5a5"),
-        "sync": ("rgba(96, 165, 250, 0.16)", "#bfdbfe"),
-        "warning": ("rgba(251, 191, 36, 0.15)", "#fbbf24"),
-        "success": ("rgba(34, 197, 94, 0.15)", "#86efac"),
+        "running": ("rgba(22, 163, 74, 0.12)", "#15803d"),
+        "idle": ("rgba(100, 116, 139, 0.12)", "#475569"),
+        "error": ("rgba(220, 38, 38, 0.12)", "#b91c1c"),
+        "sync": ("rgba(37, 99, 235, 0.12)", "#1d4ed8"),
+        "warning": ("rgba(217, 119, 6, 0.12)", "#a16207"),
+        "success": ("rgba(22, 163, 74, 0.12)", "#15803d"),
     }
 
     def __init__(self, text: str = "", state: str = "idle", parent=None):

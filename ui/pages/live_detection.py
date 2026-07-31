@@ -36,14 +36,15 @@ class CameraFeedWidget(QFrame):
         self.setMinimumSize(320, 240)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
 
         # Camera name / role header
         header = QHBoxLayout()
         header.setSpacing(8)
         name_label = QLabel(camera.get("name", "Camera"))
-        name_label.setStyleSheet("color: #f8fafc; font-size: 14px; font-weight: 700; background: transparent;")
+        name_label.setToolTip(camera.get("rtsp_url", ""))
+        name_label.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 700; background: transparent;")
         header.addWidget(name_label)
 
         role = camera.get("camera_role", "general")
@@ -51,13 +52,12 @@ class CameraFeedWidget(QFrame):
         header.addWidget(role_pill)
         header.addStretch()
 
-        status = "Enabled" if camera.get("enabled") else "Disabled"
-        status_pill = Pill(status, "running" if camera.get("enabled") else "idle")
-        header.addWidget(status_pill)
+        self.status_pill = Pill("Checking…", "warning")
+        header.addWidget(self.status_pill)
         layout.addLayout(header)
 
         # Placeholder for stream area
-        self.feed_label = QLabel("No Feed")
+        self.feed_label = QLabel("Checking camera connection…")
         self.feed_label.setAlignment(Qt.AlignCenter)
         self.feed_label.setMinimumHeight(180)
         self.feed_label.setStyleSheet("""
@@ -68,13 +68,30 @@ class CameraFeedWidget(QFrame):
         """)
         layout.addWidget(self.feed_label, 1)
 
-        # RTSP URL
+        # Stream metadata footer
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
         url_label = QLabel(camera.get("rtsp_url", "No URL"))
         url_label.setStyleSheet("color: #94a3b8; font-size: 11px; background: transparent;")
         url_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(url_label)
+        footer.addWidget(url_label, 1)
+        self.frame_info = QLabel("Waiting for frame")
+        self.frame_info.setStyleSheet("color: #64748b; font-size: 10px; background: transparent;")
+        footer.addWidget(self.frame_info)
+        layout.addLayout(footer)
 
         self.set_frame(frame_bytes)
+
+    def set_status(self, text: str, state: str = "idle", detail: str = ""):
+        self.status_pill.set_text(text)
+        self.status_pill.set_state(state)
+        self.status_pill.setToolTip(detail)
+        if self._last_pixmap.isNull():
+            self.feed_label.setText(detail or text)
+            self.feed_label.setPixmap(QPixmap())
+
+    def set_frame_info(self, text: str):
+        self.frame_info.setText(text)
 
     def set_frame(self, frame_bytes: bytes | None, faces: list[dict] | None = None):
         if faces is not None:
@@ -190,12 +207,14 @@ class LiveDetectionPage(QWidget):
         text_col.setSpacing(4)
         title = QLabel("Live Detection")
         title.setProperty("class", "page-title")
-        desc = QLabel("RTSP feeds, face detection, and recognition")
+        desc = QLabel("Monitor camera health, recognition activity, and security events in real time")
         desc.setProperty("class", "page-desc")
         text_col.addWidget(title)
-        # text_col.addWidget(desc)
+        text_col.addWidget(desc)
         hdr_layout.addLayout(text_col)
         hdr_layout.addStretch()
+        self._system_pill = Pill("Checking system…", "warning")
+        hdr_layout.addWidget(self._system_pill, 0, Qt.AlignVCenter)
 
         # Controls
         controls = QHBoxLayout()
@@ -215,8 +234,9 @@ class LiveDetectionPage(QWidget):
         # self.stop_btn.clicked.connect(self._stop_detection)
         # controls.addWidget(self.stop_btn)
 
-        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn = QPushButton("↻  Refresh")
         self.refresh_btn.setProperty("class", "ghost")
+        self.refresh_btn.setToolTip("Refresh cameras and backend status")
         self.refresh_btn.setStyleSheet("QPushButton { background:#ffffff; color:#111827; border:1px solid #e5e7eb; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { border-color:#1a73e8; background:#eef4ff; }")
         self.refresh_btn.clicked.connect(self.refresh)
         controls.addWidget(self.refresh_btn)
@@ -225,6 +245,10 @@ class LiveDetectionPage(QWidget):
         layout.addWidget(header)
 
         # Status row
+        self._sync_label = QLabel("Updating system status…")
+        self._sync_label.setProperty("class", "muted")
+        self._sync_label.setStyleSheet("font-size: 11px; padding-top: 2px;")
+        layout.addWidget(self._sync_label)
         self._status_layout = QHBoxLayout()
         self._status_layout.setSpacing(12)
         self._stat_state = StatCard("State", "Idle")
@@ -232,16 +256,17 @@ class LiveDetectionPage(QWidget):
         self._stat_unknown = StatCard("Unknown Detections", "0")
         self._stat_registered = StatCard("Registered", "0")
         self._stat_last = StatCard("Last Face", "-")
+        self._stat_cameras = StatCard("Cameras Online", "0/0")
 
         for card in [self._stat_state, self._stat_known, self._stat_unknown,
-                     self._stat_registered, self._stat_last]:
+                     self._stat_registered, self._stat_last, self._stat_cameras]:
             self._status_layout.addWidget(card)
         layout.addLayout(self._status_layout)
 
         # Camera grid
-        # layout.addWidget(SectionHeader("Camera Feeds", "All available RTSP camera streams"))
+        layout.addWidget(SectionHeader("Camera Feeds", "Live connectivity and detection telemetry by camera"))
         self._camera_grid = QGridLayout()
-        self._camera_grid.setSpacing(12)
+        self._camera_grid.setSpacing(16)
         layout.addLayout(self._camera_grid)
 
         # Detected faces panel
@@ -358,8 +383,43 @@ class LiveDetectionPage(QWidget):
         else:
             state = str(self._backend_status.get("state") or "offline").title()
         self._stat_state.set_value(state)
+        system_state = str(self._backend_status.get("state") or "offline").lower()
+        system_state_map = {
+            "running": ("System live", "running"),
+            "starting": ("Starting detection", "warning"),
+            "offline": ("Backend offline", "error"),
+        }
+        system_text, system_badge_state = system_state_map.get(system_state, (state, "idle"))
+        self._system_pill.set_text(system_text)
+        self._system_pill.set_state(system_badge_state)
+        self._sync_label.setText(f"Last updated {time.strftime('%H:%M:%S')} · Status refreshes automatically")
 
         camera_statuses = self._backend_status.get("cameras") or []
+        status_by_id = {str(item.get("id")): item for item in camera_statuses}
+        online_count = 0
+        for camera_id, feed in self._feed_widgets.items():
+            stream = (status_by_id.get(camera_id) or {}).get("stream") or {}
+            running = bool(stream.get("running"))
+            last_state = str(stream.get("lastState") or "").lower()
+            error = str(stream.get("lastError") or "")
+            age_ms = stream.get("ageMs")
+            stale = age_ms is not None and int(age_ms) > 5000
+            if running and not stale:
+                online_count += 1
+                feed.set_status("Live", "running", "Camera is connected and sending frames")
+                feed.set_frame_info("Live now")
+            elif last_state in {"error", "failed", "disconnected", "offline"} or error:
+                detail = error or f"Stream state: {last_state or 'disconnected'}"
+                feed.set_status("Disconnected", "error", detail)
+                feed.set_frame_info("No current frame")
+            elif running or last_state in {"starting", "connecting", "reconnecting"}:
+                feed.set_status("Connecting…", "warning", "Waiting for the camera stream")
+                feed.set_frame_info("Connecting")
+            else:
+                feed.set_status("Offline", "idle", "Camera is not currently streaming")
+                feed.set_frame_info("Stream stopped")
+        self._stat_cameras.set_value(f"{online_count}/{len(self._feed_widgets)}")
+
         all_faces = self._all_current_faces(camera_statuses)
         known_count = sum(1 for face in all_faces if (face.get("match") or {}).get("label"))
         unknown_count = max(0, len(all_faces) - known_count)
@@ -367,7 +427,7 @@ class LiveDetectionPage(QWidget):
         self._stat_unknown.set_value(str(unknown_count))
 
         known = next((face for face in all_faces if (face.get("match") or {}).get("label")), None)
-        self._stat_last.set_value((known.get("match") or {}).get("label") if known else "-")
+        self._stat_last.set_value(str((known.get("match") or {}).get("label") or "-") if known else "-")
 
         if all_faces:
             labels = []
@@ -471,6 +531,9 @@ class LiveDetectionPage(QWidget):
 
     def _show_backend_error(self, exc: Exception):
         self._stat_state.set_value("Offline")
+        self._system_pill.set_text("Backend offline")
+        self._system_pill.set_state("error")
+        self._sync_label.setText("Unable to reach the detection service · Retry from Refresh")
         self._faces_label.setText(f"Backend not reachable: {exc}")
 
     def _clear_layout(self, layout):
