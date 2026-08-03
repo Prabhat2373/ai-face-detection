@@ -74,7 +74,7 @@ class CameraFeedWidget(QFrame):
         url_label = QLabel(camera.get("rtsp_url", "No URL"))
         url_label.setStyleSheet("color: #94a3b8; font-size: 11px; background: transparent;")
         url_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        footer.addWidget(url_label, 1)
+        # footer.addWidget(url_label, 1)
         self.frame_info = QLabel("Waiting for frame")
         self.frame_info.setStyleSheet("color: #64748b; font-size: 10px; background: transparent;")
         footer.addWidget(self.frame_info)
