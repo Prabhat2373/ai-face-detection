@@ -83,6 +83,10 @@ elif icns.exists():
     icon_file = str(icns)
 
 from PyInstaller.utils.hooks import collect_all
+try:
+    from PyInstaller.utils.hooks.tcl_tk import tcltk_info
+except Exception:
+    tcltk_info = None
 
 hidden_modules = [
     "uvicorn",
@@ -112,6 +116,12 @@ hidden_modules = [
 all_datas = list(datas)
 all_binaries = []
 all_hiddenimports = list(hidden_modules)
+
+# Tkinter is imported by a dependency used during packaging/runtime. PyInstaller
+# may include its runtime hook without copying Tcl/Tk data on Windows, which
+# causes pyi_rth_tkinter failures in the installed bundle.
+if tcltk_info is not None and getattr(tcltk_info, "available", False):
+    all_datas.extend((source, destination) for destination, source, _kind in tcltk_info.data_files)
 
 for mod in ["uvicorn", "insightface", "onnxruntime"]:
     try:

@@ -94,7 +94,11 @@ class BackendProcess:
         self.process = subprocess.Popen(args, **popen_kwargs)
         if log_handle is not None:
             log_handle.close()
-        self._wait_until_ready()
+        if not self._wait_until_ready():
+            # Do not leave a crash-looping child behind. The caller can show a
+            # single startup failure and the user can retry deliberately.
+            self.stop()
+            raise RuntimeError("Local backend failed to become ready")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -105,11 +109,12 @@ class BackendProcess:
                 self.process.kill()
         self.process = None
 
-    def _wait_until_ready(self) -> None:
+    def _wait_until_ready(self) -> bool:
         for _ in range(40):
             if is_backend_ready(timeout=0.5):
-                return
+                return True
             time.sleep(0.25)
+        return False
 
     def _copy_initial_data(self, db_path: Path, snapshot_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)

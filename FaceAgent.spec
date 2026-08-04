@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+try:
+    from PyInstaller.utils.hooks.tcl_tk import tcltk_info
+except Exception:
+    tcltk_info = None
 
 
 model_datas = []
@@ -11,6 +15,11 @@ for model_name in ("buffalo_s", "buffalo_l"):
 
 ffmpeg_runtime = Path("build/ffmpeg-runtime")
 ffmpeg_datas = [(str(ffmpeg_runtime), "ffmpeg_runtime")] if ffmpeg_runtime.exists() else []
+
+tcl_tk_datas = (
+    [(source, destination) for destination, source, _kind in tcltk_info.data_files]
+    if tcltk_info is not None and getattr(tcltk_info, "available", False) else []
+)
 
 
 a = Analysis(
@@ -26,6 +35,7 @@ a = Analysis(
         ('public', 'public'),
         *model_datas,
         *ffmpeg_datas,
+        *tcl_tk_datas,
     ],
     hiddenimports=[
         'uvicorn.logging',
