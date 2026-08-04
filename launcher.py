@@ -142,6 +142,25 @@ except Exception:
 DEFAULT_LICENSE_FILENAME = "license.key"
 DEFAULT_TRIAL_DAYS = 14
 BACKEND_STARTUP_TIMEOUT = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "10.0"))
+_INSTANCE_MUTEX = None
+
+
+def _acquire_windows_instance_mutex() -> bool:
+    """Allow only one user-facing launcher instance per Windows session."""
+    global _INSTANCE_MUTEX
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        mutex = kernel32.CreateMutexW(None, False, "Global\\OtenceIntelligenceLauncher")
+        if not mutex:
+            return True
+        _INSTANCE_MUTEX = mutex
+        already_exists = ctypes.get_last_error() == 183
+        return not already_exists
+    except Exception:
+        return True
 # Application version used in Machine Request; allow override via env at build/package time
 APP_VERSION = os.getenv("FACEAGENT_VERSION", "1.0.0")
 
@@ -285,6 +304,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"\n--- Application Started at {time.ctime()} ---")
         except Exception:
             pass
+
+    # Backend and UI child modes are intentionally allowed; only the outer
+    # user-facing launcher owns the single-instance mutex.
+    if "--backend" not in sys.argv and "--ui" not in sys.argv:
+        if not _acquire_windows_instance_mutex():
+            return 0
 
     # Check for direct execution modes when running frozen executable
     if "--backend" in sys.argv:
@@ -477,17 +502,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             if getattr(sys, "frozen", False):
                 try:
-                    print("Launching UI (frozen bundle) as new process...")
-                    cmd = [sys.executable, "--ui"]
+                    # The launcher is already the frozen application. Running
+                    # a second copy of the large PyInstaller executable for
+                    # the UI wastes memory and can trigger Windows paging-file
+                    # failures on low-end devices. Host the UI in this process;
+                    # only the backend remains a child process.
+                    print("Launching UI in the frozen launcher process...")
                     env["FACEAGENT_NO_AUTO_START_BACKEND"] = "1"
                     env["FACEAGENT_LAUNCHER_MANAGED"] = "1"
-                    popen_kwargs = {"env": env}
-                    if sys.platform == "win32":
-                        popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-                    proc = subprocess.Popen(cmd, **popen_kwargs)
-                    exit_code = proc.wait()
+                    os.environ.update({
+                        "FACEAGENT_NO_AUTO_START_BACKEND": "1",
+                        "FACEAGENT_LAUNCHER_MANAGED": "1",
+                    })
+                    from ui.app import main as ui_main
+                    try:
+                        ui_main()
+                        exit_code = 0
+                    except SystemExit as exc:
+                        exit_code = int(exc.code or 0)
                 except Exception as exc:
-                    print("Failed to launch UI from frozen bundle:", exc, file=sys.stderr)
+                    print("Failed to launch UI in frozen bundle:", exc, file=sys.stderr)
                     exit_code = 3
             else:
                 if not ui_script.exists():
@@ -517,6 +551,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print("Warning: restarted backend did not become healthy.", file=sys.stderr)
                 continue
         break
+
+    # The backend is owned by this launcher. Always shut it down when the UI
+    # exits so closing the application cannot leave a hidden child process
+    # consuming memory or trigger another launch to accumulate processes.
+    if started_backend and backend_proc is not None:
+        try:
+            backend_proc.stop()
+        except Exception as exc:
+            print(f"Failed to stop local backend cleanly: {exc}", file=sys.stderr)
 
     return int(exit_code or 0)
 
