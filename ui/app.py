@@ -233,8 +233,8 @@ def main():
         # Run application event loop
         sys.exit(app.exec())
     finally:
-        # Keep backend process running in the background when the main window is closed
-        pass
+        if backend is not None:
+            backend.stop()
 
 
 if __name__ == "__main__":

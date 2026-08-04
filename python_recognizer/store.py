@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
+
 # ---------------------------------------------------------------------------
 # Canonical Database Path Resolution (Unified Single DB Path)
 # ---------------------------------------------------------------------------
@@ -132,11 +134,52 @@ class SQLiteStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._lock = threading.RLock()
+        self._credential_key_path = self.db_path.parent / ".camera-credentials.key"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._secure_path(self.db_path.parent, 0o700)
         self._ensure_schema()
+        self._migrate_camera_credentials()
         self._secure_path(self.db_path, 0o600)
 
+    def _credential_cipher(self) -> Fernet:
+        if self._credential_key_path.exists():
+            key = self._credential_key_path.read_bytes().strip()
+        else:
+            key = Fernet.generate_key()
+            self._credential_key_path.write_bytes(key + b"\n")
+            self._secure_path(self._credential_key_path, 0o600)
+        return Fernet(key)
+
+    def _encrypt_secret(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        if value.startswith("enc:"):
+            return value
+        return "enc:" + self._credential_cipher().encrypt(value.encode("utf-8")).decode("ascii")
+
+    def _decrypt_secret(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not value.startswith("enc:"):
+            # Legacy plaintext values are migrated during initialization.
+            return value
+        try:
+            return self._credential_cipher().decrypt(value[4:].encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, ValueError):
+            return None
+
+    def _migrate_camera_credentials(self) -> None:
+        """Encrypt credentials created by older versions of the application."""
+        with self._lock, self.connection() as conn:
+            rows = conn.execute("SELECT id, rtsp_username, rtsp_password FROM cameras").fetchall()
+            for row in rows:
+                username = row["rtsp_username"]
+                password = row["rtsp_password"]
+                if (username and not str(username).startswith("enc:")) or (password and not str(password).startswith("enc:")):
+                    conn.execute(
+                        "UPDATE cameras SET rtsp_username = ?, rtsp_password = ? WHERE id = ?",
+                        (self._encrypt_secret(username), self._encrypt_secret(password), row["id"]),
+                    )
     @staticmethod
     def _secure_path(path: Path, mode: int) -> None:
         if os.name != "nt":
@@ -152,6 +195,10 @@ class SQLiteStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA temp_store = MEMORY")
+        conn.execute("PRAGMA cache_size = -16000")
         return conn
 
     def backup_to(self, destination: Path) -> Path:
@@ -287,6 +334,14 @@ class SQLiteStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    target_id TEXT,
+                    details TEXT,
+                    created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_attendance_date
                     ON attendance_records(attendance_date, last_appearance);
                 CREATE INDEX IF NOT EXISTS idx_attendance_label
@@ -365,6 +420,8 @@ class SQLiteStore:
                 if camera_id.startswith(scoped) or (legacy_default and "::" not in camera_id):
                     payload = dict(row)
                     payload["id"] = unscope_key(camera_id, tenant_id)
+                    payload["rtsp_username"] = self._decrypt_secret(payload.get("rtsp_username"))
+                    payload["rtsp_password"] = self._decrypt_secret(payload.get("rtsp_password"))
                     results.append(payload)
             return results
 
@@ -377,13 +434,18 @@ class SQLiteStore:
             if row:
                 payload = dict(row)
                 payload["id"] = unscope_key(str(payload["id"]), tenant_id)
+                payload["rtsp_username"] = self._decrypt_secret(payload.get("rtsp_username"))
+                payload["rtsp_password"] = self._decrypt_secret(payload.get("rtsp_password"))
                 return payload
             if normalize_tenant_id(tenant_id) == "default":
                 row = conn.execute(
                     "SELECT * FROM cameras WHERE id = ?", (camera_id,)
                 ).fetchone()
                 if row:
-                    return dict(row)
+                    payload = dict(row)
+                    payload["rtsp_username"] = self._decrypt_secret(payload.get("rtsp_username"))
+                    payload["rtsp_password"] = self._decrypt_secret(payload.get("rtsp_password"))
+                    return payload
             return None
 
     def upsert_camera(self, camera: dict[str, Any], tenant_id: str = "default") -> dict[str, Any]:
@@ -399,6 +461,19 @@ class SQLiteStore:
             raise ValueError("rtspUrl is required")
         rtsp_username = self._clean_optional(camera.get("rtspUsername") or camera.get("rtsp_username"))
         rtsp_password = self._clean_optional(camera.get("rtspPassword") or camera.get("rtsp_password"))
+        # An edit form may omit credentials because the API intentionally
+        # redacts passwords. Preserve the existing secret instead of replacing
+        # it with NULL and breaking the camera connection.
+        existing_camera = self.get_camera(camera_id, tenant_id) if camera.get("id") else None
+        if existing_camera:
+            if rtsp_username is None:
+                rtsp_username = existing_camera.get("rtsp_username")
+            if rtsp_password is None:
+                rtsp_password = existing_camera.get("rtsp_password")
+        if len(camera_id) > 120 or len(name) > 120 or len(rtsp_url) > 2048:
+            raise ValueError("Camera id, name, or RTSP URL is too long")
+        if (rtsp_username and len(rtsp_username) > 256) or (rtsp_password and len(rtsp_password) > 512):
+            raise ValueError("Camera credentials are too long")
         enabled = 1 if bool(camera.get("enabled", True)) else 0
         now = iso_now()
 
@@ -419,7 +494,7 @@ class SQLiteStore:
                     updated_at = excluded.updated_at
                 """,
                 (scoped_id, name, camera_role, department_id, rtsp_url,
-                 rtsp_username, rtsp_password, enabled, now, now),
+                 self._encrypt_secret(rtsp_username), self._encrypt_secret(rtsp_password), enabled, now, now),
             )
             row = conn.execute(
                 "SELECT * FROM cameras WHERE id = ?", (scoped_id,)
@@ -433,6 +508,8 @@ class SQLiteStore:
                 }
             payload = dict(row)
             payload["id"] = unscope_key(str(payload["id"]), tenant_id)
+            payload["rtsp_username"] = self._decrypt_secret(payload.get("rtsp_username"))
+            payload["rtsp_password"] = self._decrypt_secret(payload.get("rtsp_password"))
             return payload
 
     def delete_camera(self, camera_id: str, tenant_id: str = "default") -> bool:
@@ -998,6 +1075,16 @@ class SQLiteStore:
     def clear_sync_events(self) -> None:
         with self._lock, self.connection() as conn:
             conn.execute("DELETE FROM sync_events")
+
+    def record_audit(self, action: str, tenant_id: str = "default", target_id: str | None = None,
+                     details: dict[str, Any] | None = None) -> int:
+        with self._lock, self.connection() as conn:
+            row = conn.execute(
+                "INSERT INTO audit_events (action, tenant_id, target_id, details, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(action)[:120], normalize_tenant_id(tenant_id), str(target_id)[:200] if target_id else None,
+                 json.dumps(details or {}, ensure_ascii=False)[:4000], iso_now()),
+            )
+            return int(row.lastrowid)
 
     # ── Tenants / Users / Licenses ──────────────────────────────────────
 
