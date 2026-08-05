@@ -524,9 +524,6 @@ class AttendancePage(QWidget):
         d_layout.addWidget(btn_close, alignment=Qt.AlignCenter)
         dialog.exec()
 
-        self._table.setSortingEnabled(True)
-        self._count_label.setText(f"{len(records)} records")
-
     def _format_dt(self, iso_str):
         if not iso_str:
             return "-"

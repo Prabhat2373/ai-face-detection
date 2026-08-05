@@ -8,6 +8,7 @@ and adapts the results for its pages.
 
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Any, Optional
 from pathlib import Path
 
@@ -224,21 +225,26 @@ class Database:
             except Exception:
                 pass
 
-            # 2. Hourly check-in activity (general distribution or specific date)
+            # 2. Hourly check-in activity. Timestamps are stored in UTC; the
+            # report must bucket them in the machine's local timezone so a
+            # local 5 PM check-in is not displayed under a UTC hour.
             try:
-                if date_str:
-                    hour_rows = conn.execute(
-                        "SELECT strftime('%H', last_appearance) as hr, COUNT(*) as c FROM attendance_records WHERE attendance_date = ? GROUP BY hr",
-                        (date_str,)
-                    ).fetchall()
-                else:
-                    hour_rows = conn.execute(
-                        "SELECT strftime('%H', last_appearance) as hr, COUNT(*) as c FROM attendance_records GROUP BY hr"
-                    ).fetchall()
+                rows = conn.execute(
+                    "SELECT last_appearance FROM attendance_records WHERE last_appearance IS NOT NULL"
+                ).fetchall()
                 hour_stats = {}
-                for r in hour_rows:
-                    if r["hr"] is not None:
-                        hour_stats[int(r["hr"])] = r["c"]
+                for row in rows:
+                    try:
+                        timestamp = datetime.fromisoformat(str(row["last_appearance"]).replace("Z", "+00:00"))
+                        if timestamp.tzinfo is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+                        local_timestamp = timestamp.astimezone()
+                        if date_str and local_timestamp.strftime("%Y-%m-%d") != date_str:
+                            continue
+                        hour = local_timestamp.hour
+                        hour_stats[hour] = hour_stats.get(hour, 0) + 1
+                    except (TypeError, ValueError, OverflowError):
+                        continue
             except Exception:
                 pass
 

@@ -565,6 +565,7 @@ class FaceEngine:
                     effective_department_id or None,
                     department_name,
                     snapshot_path,
+                    face["match"].get("employeeCode"),
                 )
                 if attendance_record.get("_accepted"):
                     self.store.enqueue_sync_event(
@@ -1329,12 +1330,14 @@ class FaceEngine:
                 continue
 
             if best is None or score > float(best["score"]):
+                employee_code = self.store.employee_code(employee_id, self.default_tenant_id)
                 best = {
                     "label": label,
                     "score": score,
                     "confidence": score,
                     "sampleCount": len(samples),
                     "employeeId": employee_id,
+                    "employeeCode": employee_code,
                     "departmentIds": sorted(emp_dept_tokens),
                     "authorized": True,
                 }

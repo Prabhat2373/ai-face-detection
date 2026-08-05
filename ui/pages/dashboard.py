@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
     QPushButton, QSizePolicy
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QPixmap, QColor
 from PySide6.QtSvgWidgets import QSvgWidget
 
@@ -32,7 +32,7 @@ class DashboardCard(QFrame):
                 border-radius: 8px;
             }
         """)
-        self.setMinimumHeight(125)
+        self.setMinimumHeight(145)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
@@ -41,6 +41,9 @@ class DashboardCard(QFrame):
 
         # Header of card (icon placeholder/badge row)
         top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(0)
+        top_row.setAlignment(Qt.AlignTop)
         # Select SVG icon name based on title
         svg_map = {
             "Total Employees": "employees.svg",
@@ -105,6 +108,8 @@ class DashboardCard(QFrame):
             border: none;
             background: transparent;
         """)
+        self.value_lbl.setMinimumHeight(34)
+        self.value_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         layout.addWidget(self.value_lbl)
 
         # Title
@@ -116,6 +121,7 @@ class DashboardCard(QFrame):
             border: none;
             background: transparent;
         """)
+        self.title_lbl.setMinimumHeight(18)
         layout.addWidget(self.title_lbl)
 
         # Subtext
@@ -126,6 +132,7 @@ class DashboardCard(QFrame):
             border: none;
             background: transparent;
         """)
+        self.subtext_lbl.setMinimumHeight(18)
         layout.addWidget(self.subtext_lbl)
 
     def update_value(self, value: str, subtext: str):
@@ -140,6 +147,10 @@ class DashboardPage(QWidget):
         super().__init__(parent)
         self.db = Database.get()
         self._build_ui()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(5000)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.start()
         self.refresh()
 
     def _build_ui(self):
@@ -614,6 +625,24 @@ class DashboardPage(QWidget):
             except Exception:
                 attendance_today = []
 
+            # Attendance rows may have been recorded before a camera was
+            # assigned to a department, so do not depend only on the row's
+            # department columns. Resolve the recognized employee back to
+            # their current department membership.
+            try:
+                employees = self.db.list_employees()
+            except Exception:
+                employees = []
+            employee_departments = {}
+            for employee in employees:
+                identity_keys = {
+                    str(employee.get("name") or "").strip().casefold(),
+                    str(employee.get("employee_code") or "").strip().casefold(),
+                }
+                identity_keys.discard("")
+                for key in identity_keys:
+                    employee_departments[key] = employee.get("departments") or []
+
             for dept in depts:
                 dept_id = dept.get("id")
                 # Calculate real ok_rate based on today's attendance logs
@@ -621,8 +650,15 @@ class DashboardPage(QWidget):
                 if dept_emps_count > 0:
                     present_in_dept = sum(
                         1 for a in attendance_today
-                        if a.get("department_id") == dept_id
-                        and a.get("status") in ("Present", "Checked In", "Complete")
+                        if (
+                            str(a.get("last_department_id") or a.get("first_department_id") or "") == str(dept_id)
+                            or str(dept_id) in {
+                                str(value) for value in employee_departments.get(
+                                    str(a.get("employee_code") or a.get("label") or "").strip().casefold(), []
+                                )
+                            }
+                        )
+                        and a.get("status", "Present") in ("Present", "Checked In", "Complete")
                     )
                     dept["ok_rate"] = (present_in_dept / dept_emps_count) * 100.0
                 else:

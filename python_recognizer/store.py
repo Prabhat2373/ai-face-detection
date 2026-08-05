@@ -626,6 +626,18 @@ class SQLiteStore:
                 result.append(payload)
             return result
 
+    def employee_code(self, employee_id: str | None, tenant_id: str = "default") -> str | None:
+        """Return the employee code for a recognized employee, if configured."""
+        if not employee_id:
+            return None
+        tenant = normalize_tenant_id(tenant_id)
+        with self._lock, self.connection() as conn:
+            row = conn.execute(
+                "SELECT employee_code FROM employees WHERE id = ? AND tenant_id = ?",
+                (str(employee_id), tenant),
+            ).fetchone()
+        return str(row["employee_code"]) if row and row["employee_code"] else None
+
     def _employee_department_map(self, conn: sqlite3.Connection) -> dict[str, list[str]]:
         rows = conn.execute("SELECT employee_id, department_id FROM employee_departments").fetchall()
         result: dict[str, list[str]] = defaultdict(list)
@@ -943,6 +955,7 @@ class SQLiteStore:
                     "last_confidence": float(confidence),
                     "appearances": appearances,
                     "max_confidence": max(float(row["max_confidence"]), float(confidence)),
+                    "employee_code": employee_code or row["employee_code"],
                 }
                 attendance_accepted = appearances != int(row["appearances"])
             conn.execute(
@@ -952,8 +965,9 @@ class SQLiteStore:
                     first_appearance, last_appearance, first_camera_role, last_camera_role,
                     first_camera_id, last_camera_id, first_camera_name, last_camera_name,
                     first_department_id, last_department_id, first_department_name, last_department_name,
-                    first_snapshot_path, last_snapshot_path, last_confidence, appearances, max_confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    first_snapshot_path, last_snapshot_path, last_confidence, appearances, max_confidence,
+                    employee_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(label) DO UPDATE SET
                     person_label = excluded.person_label,
                     attendance_date = excluded.attendance_date,
@@ -974,6 +988,7 @@ class SQLiteStore:
                     last_confidence = excluded.last_confidence,
                     appearances = excluded.appearances,
                     max_confidence = excluded.max_confidence
+                    ,employee_code = COALESCE(excluded.employee_code, attendance_records.employee_code)
                 """,
                 (
                     stored_label,
@@ -986,6 +1001,7 @@ class SQLiteStore:
                     record["first_department_name"], record["last_department_name"],
                     record["first_snapshot_path"], record["last_snapshot_path"],
                     record["last_confidence"], record["appearances"], record["max_confidence"],
+                    record["employee_code"],
                 ),
             )
             record["_accepted"] = attendance_accepted
