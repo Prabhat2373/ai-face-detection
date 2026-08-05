@@ -566,15 +566,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 continue
         break
 
-    # The backend is owned by this launcher. Always shut it down when the UI
-    # exits so closing the application cannot leave a hidden child process
-    # consuming memory or trigger another launch to accumulate processes.
-    if started_backend and backend_proc is not None:
-        try:
-            backend_proc.stop()
-        except Exception as exc:
-            print(f"Failed to stop local backend cleanly: {exc}", file=sys.stderr)
-
+    # Keep the backend alive after the UI closes. The backend is the local
+    # background service and is intentionally independent from the PySide6
+    # window; it may continue serving local clients and camera processing.
     return int(exit_code or 0)
 
 

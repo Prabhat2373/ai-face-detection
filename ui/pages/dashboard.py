@@ -630,27 +630,9 @@ class DashboardPage(QWidget):
 
             # If the database is empty, fallback to the design mockups
             if not depts:
-                depts = [
-                    {"name": "Engineering", "employee_count": 24, "ok_rate": 88.0},
-                    {"name": "HR", "employee_count": 8, "ok_rate": 100.0},
-                    {"name": "Finance", "employee_count": 16, "ok_rate": 88.0},
-                    {"name": "Operations", "employee_count": 18, "ok_rate": 94.0},
-                    {"name": "IT", "employee_count": 12, "ok_rate": 92.0},
-                    {"name": "Marketing", "employee_count": 14, "ok_rate": 86.0},
-                    {"name": "Sales", "employee_count": 18, "ok_rate": 89.0},
-                    {"name": "Support", "employee_count": 14, "ok_rate": 86.0}
-                ]
+                depts = []
         except Exception:
-            depts = [
-                {"name": "Engineering", "employee_count": 24, "ok_rate": 88.0},
-                {"name": "HR", "employee_count": 8, "ok_rate": 100.0},
-                {"name": "Finance", "employee_count": 16, "ok_rate": 88.0},
-                {"name": "Operations", "employee_count": 18, "ok_rate": 94.0},
-                {"name": "IT", "employee_count": 12, "ok_rate": 92.0},
-                {"name": "Marketing", "employee_count": 14, "ok_rate": 86.0},
-                {"name": "Sales", "employee_count": 18, "ok_rate": 89.0},
-                {"name": "Support", "employee_count": 14, "ok_rate": 86.0}
-            ]
+            depts = []
 
         self.dept_table.setRowCount(len(depts))
         for row_idx, dept in enumerate(depts):
