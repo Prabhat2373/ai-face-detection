@@ -69,7 +69,7 @@
   const latestFrameUrls = new Map();
 
   function buildStreamUrl(params = {}) {
-    const url = new URL("/frame.jpg", API_BASE);
+    const url = new URL("/stream.mjpg", API_BASE);
     if (params.cameraId) {
       url.searchParams.set("cameraId", params.cameraId);
     }
@@ -87,7 +87,7 @@
   }
 
   function buildStreamKey(params = {}) {
-    const key = new URL("/frame.jpg", API_BASE);
+    const key = new URL("/stream.mjpg", API_BASE);
     if (params.cameraId) {
       key.searchParams.set("cameraId", params.cameraId);
     }
@@ -126,16 +126,11 @@
       return;
     }
     currentMainStreamUrl = nextKey;
-    const activeId = activeCameraId();
-    if (activeId && latestFrameUrls.has(activeId)) {
-      stream.src = latestFrameUrls.get(activeId);
-    } else if (!activeId) {
-      const firstCamera = cameras.find((camera) => !activeCameraRole() || camera.camera_role === activeCameraRole());
-      const cached = firstCamera ? latestFrameUrls.get(firstCamera.id) : null;
-      if (cached) {
-        stream.src = cached;
-      }
-    }
+    // Use the backend's continuous MJPEG response directly. The previous
+    // implementation waited for frames from the live WebSocket before
+    // assigning an image source, which left the browser view black when the
+    // WebSocket was unavailable or delayed.
+    stream.src = buildStreamUrl(params);
     streamLoadTimer = window.setTimeout(() => {
       if (!stream.naturalWidth || !stream.naturalHeight) {
         if (stateEl) {

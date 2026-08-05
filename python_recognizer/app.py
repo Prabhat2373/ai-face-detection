@@ -82,6 +82,19 @@ logger = logging.getLogger("python_recognizer")
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
 
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_lock = threading.Lock()
+
+
+def _check_login_rate_limit(key: str) -> None:
+    now = time.monotonic()
+    with _login_lock:
+        attempts = [stamp for stamp in _login_attempts[key] if now - stamp < 60.0]
+        if len(attempts) >= 10:
+            raise HTTPException(status_code=429, detail="Too many login attempts; try again later")
+        attempts.append(now)
+        _login_attempts[key] = attempts
+
 
 def decode_base64_image(image_base64: str) -> np.ndarray:
     if "," in image_base64 and image_base64.lower().lstrip().startswith("data:"):
@@ -187,7 +200,7 @@ class FaceEngine:
         self.backup_interval_seconds = max(3600, parse_int_env("BACKUP_INTERVAL_SECONDS", 86_400))
         self.backup_retention_count = max(1, parse_int_env("BACKUP_RETENTION_COUNT", 7))
         self.backup_path = Path(
-            os.getenv("BACKUP_PATH", str(db_path.parent.parent / "backups"))
+            os.getenv("BACKUP_PATH", str(db_path.parent / "backups"))
         ).expanduser()
         self._backup_stop = threading.Event()
         self._backup_thread: threading.Thread | None = None
@@ -654,6 +667,7 @@ class FaceEngine:
     def clear_faces(self, tenant_id: str | None = None) -> None:
         tenant = tenant_id or self.default_tenant_id
         self.store.clear_faces(tenant)
+        self.store.record_audit("faces.clear", tenant)
         self._registered_face_count = 0
         self.store.enqueue_sync_event("faces.cleared", {}, tenant)
 
@@ -667,7 +681,11 @@ class FaceEngine:
         return self.store.upsert_department(payload, tenant_id or self.default_tenant_id)
 
     def delete_department(self, department_id: str, tenant_id: str | None = None) -> bool:
-        return self.store.delete_department(department_id, tenant_id or self.default_tenant_id)
+        tenant = tenant_id or self.default_tenant_id
+        removed = self.store.delete_department(department_id, tenant)
+        if removed:
+            self.store.record_audit("department.delete", tenant, department_id)
+        return removed
 
     def list_employees(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
         return self.store.list_employees(tenant_id or self.default_tenant_id)
@@ -676,7 +694,10 @@ class FaceEngine:
         return self.store.upsert_employee(payload, tenant_id or self.default_tenant_id)
 
     def delete_employee(self, employee_id: str, tenant_id: str | None = None) -> bool:
-        removed = self.store.delete_employee(employee_id, tenant_id or self.default_tenant_id)
+        tenant = tenant_id or self.default_tenant_id
+        removed = self.store.delete_employee(employee_id, tenant)
+        if removed:
+            self.store.record_audit("employee.delete", tenant, employee_id)
         self._registered_face_count = len(self.store.list_faces(self.default_tenant_id))
         return removed
 
@@ -714,7 +735,11 @@ class FaceEngine:
         return self.store.upsert_camera(payload, tenant_id or self.default_tenant_id)
 
     def delete_camera(self, camera_id: str, tenant_id: str | None = None) -> bool:
-        return self.store.delete_camera(camera_id, tenant_id or self.default_tenant_id)
+        tenant = tenant_id or self.default_tenant_id
+        removed = self.store.delete_camera(camera_id, tenant)
+        if removed:
+            self.store.record_audit("camera.delete", tenant, camera_id)
+        return removed
 
     def default_camera(self, tenant_id: str | None = None) -> dict[str, Any] | None:
         return self.store.get_default_camera(tenant_id or self.default_tenant_id)
@@ -1682,19 +1707,19 @@ class FaceEngine:
 
 class RegisterRequest(BaseModel):
     label: str = Field(min_length=1, max_length=80)
-    imageBase64: str
+    imageBase64: str = Field(min_length=64, max_length=12_000_000)
     cameraRole: str | None = None
     cameraId: str | None = None
     tenantId: str | None = None
 
 
 class EmployeePhotosRequest(BaseModel):
-    photos: list[str] = Field(default_factory=list)
+    photos: list[str] = Field(default_factory=list, max_length=10)
     tenantId: str | None = None
 
 
 class RecognizeRequest(BaseModel):
-    imageBase64: str
+    imageBase64: str = Field(min_length=64, max_length=12_000_000)
     cameraRole: str | None = None
     cameraId: str | None = None
     tenantId: str | None = None
@@ -1719,9 +1744,9 @@ engine = FaceEngine()
 app = FastAPI(title="Python Face Recognizer", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[item.strip() for item in os.getenv("FACEAGENT_CORS_ORIGINS", "http://127.0.0.1:5055,http://localhost:5055").split(",") if item.strip()],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept", "X-Tenant-Id"],
 )
 
 
@@ -1731,6 +1756,15 @@ async def health() -> dict[str, Any]:
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def _public_camera(camera: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Never expose stored RTSP credentials through the HTTP API."""
+    if camera is None:
+        return None
+    safe = dict(camera)
+    safe.pop("rtsp_password", None)
+    return safe
 
 
 @app.get("/")
@@ -1812,7 +1846,7 @@ async def snapshot_file(filename: str) -> Response:
 
 @app.get("/cameras")
 async def cameras(x_tenant_id: str | None = Header(default=None)) -> dict[str, Any]:
-    return {"cameras": engine.list_cameras(x_tenant_id)}
+    return {"cameras": [_public_camera(item) for item in engine.list_cameras(x_tenant_id)]}
 
 
 @app.get("/departments")
@@ -1873,7 +1907,7 @@ async def add_camera(payload: dict[str, Any], x_tenant_id: str | None = Header(d
     camera = engine.upsert_camera(payload, x_tenant_id)
     if engine.auto_start_detection:
         engine.start()
-    return {"camera": camera}
+    return {"camera": _public_camera(camera)}
 
 
 @app.get("/cameras/{camera_id}")
@@ -1881,7 +1915,7 @@ async def get_camera(camera_id: str, x_tenant_id: str | None = Header(default=No
     camera = engine.get_camera(camera_id, x_tenant_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return {"camera": camera}
+    return {"camera": _public_camera(camera)}
 
 
 @app.put("/cameras/{camera_id}")
@@ -1890,7 +1924,7 @@ async def update_camera(camera_id: str, payload: dict[str, Any], x_tenant_id: st
     camera = engine.upsert_camera(payload, x_tenant_id)
     if engine.auto_start_detection:
         engine.start()
-    return {"camera": camera}
+    return {"camera": _public_camera(camera)}
 
 
 @app.delete("/cameras/{camera_id}")
@@ -2000,7 +2034,7 @@ async def attendance(date: str | None = None, x_tenant_id: str | None = Header(d
 
 @app.get("/alarms")
 async def alarms(limit: int = 100) -> dict[str, Any]:
-    return {"alarms": await asyncio.to_thread(engine.store.list_alarm_events, limit)}
+    return {"alarms": await asyncio.to_thread(engine.store.list_alarm_events, max(1, min(limit, 500)))}
 
 
 @app.delete("/alarms")
@@ -2205,9 +2239,12 @@ async def bootstrap(payload: BootstrapRequest) -> dict[str, Any]:
 
 @app.post("/auth/login")
 async def login(payload: LoginRequest) -> dict[str, Any]:
+    _check_login_rate_limit(f"{payload.tenantId.strip().lower()}:{payload.email.strip().lower()}")
     user = await asyncio.to_thread(engine.store.authenticate_user, payload.tenantId, payload.email, payload.password)
     if user is None:
+        await asyncio.to_thread(engine.store.record_audit, "auth.login_failed", payload.tenantId)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    await asyncio.to_thread(engine.store.record_audit, "auth.login_success", payload.tenantId, str(user.get("id")))
     license_row = await asyncio.to_thread(engine.store.get_license, payload.tenantId)
     return {
         "ok": True,

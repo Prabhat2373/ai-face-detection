@@ -18,6 +18,7 @@ import sys
 from typing import Dict
 
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -220,8 +221,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Otence Intelligence")
-        self.setMinimumSize(1200, 720)
-        self.resize(1440, 860)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        min_width = 980
+        min_height = 680
+        self.setMinimumSize(min_width, min_height)
+        if available:
+            width = min(1440, max(min_width, available.width() - 40))
+            height = min(900, max(min_height, available.height() - 60))
+            self.resize(width, height)
+        else:
+            self.resize(1200, 760)
 
         # Set window icon explicitly
         logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
