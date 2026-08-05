@@ -449,6 +449,23 @@ class EmployeesPage(QWidget):
                 ) from exc
         return saved
 
+    def _show_light_message(self, icon, title: str, message: str) -> None:
+        """Keep employee dialogs readable when the OS is using dark mode."""
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setMinimumSize(0, 0)
+        box.setMaximumWidth(560)
+        box.setStyleSheet("""
+            QMessageBox { background: #ffffff; color: #111827; border: 1px solid #d1d5db; }
+            QMessageBox QLabel { color: #111827; background: #ffffff; font-size: 13px; font-weight: 600; min-width: 0px; max-width: 390px; }
+            QMessageBox QPushButton { background: #ffffff; color: #111827; border: 1px solid #9ca3af; border-radius: 6px; padding: 6px 18px; min-width: 64px; font-weight: 700; }
+            QMessageBox QPushButton:hover { background: #eef4ff; border-color: #1a73e8; }
+        """)
+        box.exec()
+
     def _add_employee(self):
         dialog = EmployeeDialog(parent=self)
         if dialog.exec():
@@ -456,7 +473,7 @@ class EmployeesPage(QWidget):
             run_in_background(
                 lambda: self._persist_employee(data),
                 on_result=lambda _result: self.refresh(),
-                on_error=lambda exc: QMessageBox.warning(self, "Error", f"Could not save employee: {exc}"),
+                on_error=lambda exc: self._show_light_message(QMessageBox.Warning, "Error", f"Could not save employee: {exc}"),
             )
 
     def _employee_by_row(self, row: int) -> Optional[dict]:
@@ -534,7 +551,7 @@ class EmployeesPage(QWidget):
             run_in_background(
                 lambda: self._persist_employee(data),
                 on_result=lambda _result: self.refresh(),
-                on_error=lambda exc: QMessageBox.warning(self, "Error", f"Could not update employee: {exc}"),
+                on_error=lambda exc: self._show_light_message(QMessageBox.Warning, "Error", f"Could not update employee: {exc}"),
             )
 
     def _edit_selected(self):
@@ -578,7 +595,7 @@ class EmployeesPage(QWidget):
                 self.db.delete_employee(employee["id"])
                 self.refresh()
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not delete: {e}")
+                self._show_light_message(QMessageBox.Warning, "Error", f"Could not delete: {e}")
 
     def _delete_selected(self):
         employee = self._employee_by_row(self._table.currentRow())

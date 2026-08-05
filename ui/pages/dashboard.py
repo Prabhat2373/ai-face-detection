@@ -1,7 +1,7 @@
 """Dashboard page matching the user's target wireframe UI."""
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from PySide6.QtWidgets import (
@@ -115,7 +115,7 @@ class DashboardCard(QFrame):
         # Title
         self.title_lbl = QLabel(title)
         self.title_lbl.setStyleSheet("""
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
             color: #4b5563;
             border: none;
@@ -127,8 +127,8 @@ class DashboardCard(QFrame):
         # Subtext
         self.subtext_lbl = QLabel(subtext)
         self.subtext_lbl.setStyleSheet("""
-            font-size: 11px;
-            color: #9ca3af;
+            font-size: 13px;
+            color: #6b7280;
             border: none;
             background: transparent;
         """)
@@ -216,9 +216,9 @@ class DashboardPage(QWidget):
         title_text_layout = QVBoxLayout()
         title_text_layout.setSpacing(2)
         title_lbl = QLabel("System Dashboard")
-        title_lbl.setStyleSheet("font-size: 18px; font-weight: 800; color: #111827;outline: none;border: none;")
+        title_lbl.setStyleSheet("font-size: 19px; font-weight: 800; color: #111827;outline: none;border: none;")
         subtitle_lbl = QLabel("Real-time operational overview")
-        subtitle_lbl.setStyleSheet("font-size: 12px; color: #6b7280;border: none;")
+        subtitle_lbl.setStyleSheet("font-size: 13px; color: #4b5563;border: none;")
         title_text_layout.addWidget(title_lbl)
         title_text_layout.addWidget(subtitle_lbl)
         title_box.addLayout(title_text_layout)
@@ -230,6 +230,9 @@ class DashboardPage(QWidget):
         breadcrumb = QLabel("Dashboard  >  Overview")
         breadcrumb.setStyleSheet("font-size: 12px; color: #9ca3af; font-weight: 500;border: none;")
         header_layout.addWidget(breadcrumb)
+        self.last_updated_lbl = QLabel("Updated --")
+        self.last_updated_lbl.setStyleSheet("font-size: 12px; color: #6b7280; border: none;")
+        header_layout.addWidget(self.last_updated_lbl)
         self._content_layout.addWidget(header_widget)
 
         # 2. KPI Cards Row
@@ -263,7 +266,7 @@ class DashboardPage(QWidget):
         det_title = QLabel("Recent Detections")
         det_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #111827; border: none;")
         det_sub = QLabel("Last 5 recognition events")
-        det_sub.setStyleSheet("font-size: 12px; color: #6b7280; border: none;")
+        det_sub.setStyleSheet("font-size: 13px; color: #4b5563; border: none;")
         det_header_layout.addWidget(det_title)
         det_header_layout.addWidget(det_sub)
         detections_layout.addLayout(det_header_layout)
@@ -291,7 +294,7 @@ class DashboardPage(QWidget):
         dept_title = QLabel("Department Attendance")
         dept_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #111827; border: none;")
         dept_sub = QLabel("Presence and accuracy by department")
-        dept_sub.setStyleSheet("font-size: 12px; color: #6b7280; border: none;")
+        dept_sub.setStyleSheet("font-size: 13px; color: #4b5563; border: none;")
         dept_hdr_layout.addWidget(dept_title)
         dept_hdr_layout.addWidget(dept_sub)
         dept_layout.addLayout(dept_hdr_layout)
@@ -315,7 +318,7 @@ class DashboardPage(QWidget):
                 background-color: #f9fafb;
                 color: #4b5563;
                 font-weight: 800;
-                font-size: 11px;
+                font-size: 13px;
                 padding: 10px 4px;
                 border: none;
                 border-bottom: 2px solid #e5e7eb;
@@ -361,7 +364,7 @@ class DashboardPage(QWidget):
         alarm_title = QLabel("Active Alarms")
         alarm_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #111827; border: none;")
         self.alarm_desc = QLabel("0 unknown persons")
-        self.alarm_desc.setStyleSheet("font-size: 11px; color: #6b7280; border: none;")
+        self.alarm_desc.setStyleSheet("font-size: 13px; color: #4b5563; border: none;")
         alarm_texts.addWidget(alarm_title)
         alarm_texts.addWidget(self.alarm_desc)
         alarm_box_layout.addLayout(alarm_texts)
@@ -395,7 +398,7 @@ class DashboardPage(QWidget):
         camera_title = QLabel("Cameras Online")
         camera_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #111827; border: none;")
         self.camera_desc = QLabel("0 of 0 active")
-        self.camera_desc.setStyleSheet("font-size: 11px; color: #6b7280; border: none;")
+        self.camera_desc.setStyleSheet("font-size: 13px; color: #4b5563; border: none;")
         camera_texts.addWidget(camera_title)
         camera_texts.addWidget(self.camera_desc)
         camera_box_layout.addLayout(camera_texts)
@@ -429,7 +432,7 @@ class DashboardPage(QWidget):
         sync_title = QLabel("Sync Status")
         sync_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #111827; border: none;")
         self.sync_desc = QLabel("Pending cloud upload")
-        self.sync_desc.setStyleSheet("font-size: 11px; color: #6b7280; border: none;")
+        self.sync_desc.setStyleSheet("font-size: 13px; color: #4b5563; border: none;")
         sync_texts.addWidget(sync_title)
         sync_texts.addWidget(self.sync_desc)
         # sync_box_layout.addLayout(sync_texts)
@@ -526,8 +529,18 @@ class DashboardPage(QWidget):
         self.card_alerts.update_value(str(active_alarms_count), f"{active_alarms_count} alerts pending")
         self.card_cameras.update_value(str(cams_active), f"{cams_active} of {total_cams} active")
 
+        self.last_updated_lbl.setText(f"Updated {datetime.now().strftime('%I:%M:%S %p')}")
+
         self.alarm_desc.setText(f"{active_alarms_count} unknown alerts pending")
-        self.camera_desc.setText(f"{cams_active} of {total_cams} active")
+        inactive_names = [
+            str(camera.get("name") or camera.get("id") or "Camera")
+            for camera in all_cams
+            if not camera.get("enabled")
+        ]
+        camera_text = f"{cams_active} of {total_cams} active"
+        if inactive_names:
+            camera_text += f" • Offline: {', '.join(inactive_names[:2])}"
+        self.camera_desc.setText(camera_text)
 
         # 2. Render recent detections matching design mockups (list items with profile avatar placeholder)
         try:
@@ -581,15 +594,28 @@ class DashboardPage(QWidget):
                 emp_code_raw = rec.get("employee_code")
                 # Fallback to checking label if code is missing but it's a known person
                 if not emp_code_raw and not is_unknown:
-                    emp_code_raw = rec.get("employee_code") or "0000"
+                    emp_code_raw = "No code assigned"
                 if len(str(emp_code_raw)) > 8: # If UUID format, abbreviate
                     emp_code_raw = str(emp_code_raw)[:8]
 
                 cam_name_raw = rec.get("last_camera_name") or rec.get("camera_name") or "CAM-01"
 
-                code_cam = f"EMP-{emp_code_raw}  •  {cam_name_raw}" if not is_unknown else f"Unknown  •  {cam_name_raw}"
+                code_text = f"EMP-{emp_code_raw}" if not is_unknown else "Unknown"
+                timestamp = rec.get("last_appearance") or rec.get("first_appearance")
+                time_text = ""
+                if timestamp:
+                    try:
+                        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        time_text = parsed.astimezone().strftime("%I:%M %p")
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                code_cam = f"{code_text}  •  {cam_name_raw}"
+                if time_text:
+                    code_cam += f"  •  {time_text}"
                 code_lbl = QLabel(code_cam)
-                code_lbl.setStyleSheet("font-size: 11px; color: #6b7280;")
+                code_lbl.setStyleSheet("font-size: 13px; color: #4b5563; font-weight: 500;")
 
                 info_layout.addWidget(name_lbl)
                 info_layout.addWidget(code_lbl)
@@ -599,7 +625,7 @@ class DashboardPage(QWidget):
                 # Confidence
                 conf = rec.get("max_confidence", 0.0)
                 conf_lbl = QLabel(f"{conf * 100:.1f}%" if conf <= 1.0 else f"{conf:.1f}%")
-                conf_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #1a73e8; margin-right: 12px;")
+                conf_lbl.setStyleSheet("font-size: 13px; font-weight: 700; color: #1a73e8; margin-right: 12px;")
                 row_layout.addWidget(conf_lbl)
 
                 # Pill Status

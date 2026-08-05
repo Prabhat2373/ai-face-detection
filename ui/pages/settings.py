@@ -190,20 +190,56 @@ class SettingsPage(QWidget):
             self.db.set_setting("ALARM_ENABLED", "true" if self.alarm_enabled.isChecked() else "false")
             restart_marker = writable_app_dir() / "restart-requested"
             restart_marker.write_text("settings", encoding="utf-8")
-            QMessageBox.information(
-                self,
+            self._show_light_message(
+                QMessageBox.Information,
                 "Success",
-                "Settings saved successfully!\n\nThe application will now restart to load the new recognition profile."
+                "Settings saved successfully!\n\nThe application will now restart to load the new recognition profile.",
             )
             app = QApplication.instance()
             if app is not None:
                 app.quit()
         except Exception as exc:
-            QMessageBox.critical(
-                self,
+            self._show_light_message(
+                QMessageBox.Critical,
                 "Error",
-                f"Failed to write settings to database:\n{exc}"
+                f"Failed to write settings to database:\n{exc}",
             )
+
+    def _show_light_message(self, icon, title: str, message: str) -> None:
+        """Show a light confirmation/error dialog regardless of OS theme."""
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setStyleSheet("""
+            QMessageBox {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #d1d5db;
+            }
+            QMessageBox QLabel {
+                color: #111827;
+                background: #ffffff;
+                font-size: 13px;
+                font-weight: 600;
+                min-width: 360px;
+            }
+            QMessageBox QPushButton {
+                background: #ffffff;
+                color: #111827;
+                border: 1px solid #9ca3af;
+                border-radius: 6px;
+                padding: 8px 22px;
+                min-width: 72px;
+                font-weight: 700;
+            }
+            QMessageBox QPushButton:hover {
+                background: #eef4ff;
+                border-color: #1a73e8;
+            }
+        """)
+        box.exec()
 
     def _update_profile_description(self):
         profile = PERFORMANCE_PROFILES.get(str(self.performance_profile.currentData()))
