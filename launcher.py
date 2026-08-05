@@ -305,9 +305,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         except Exception:
             pass
 
-    # Backend and UI child modes are intentionally allowed; only the outer
+    # Backend, UI, and activation child modes are intentionally allowed; only the outer
     # user-facing launcher owns the single-instance mutex.
-    if "--backend" not in sys.argv and "--ui" not in sys.argv:
+    if not any(flag in sys.argv for flag in ("--backend", "--ui", "--activation", "--activation-only")):
         if not _acquire_windows_instance_mutex():
             return 0
 
@@ -332,6 +332,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
         except Exception as exc:
             print("Failed to run UI:", exc, file=sys.stderr)
+            return 1
+
+    # Activation is launched as a child of the frozen executable. Route it
+    # directly to the activation dialog instead of entering the normal
+    # license-check loop again.
+    if "--activation" in sys.argv or "--activation-only" in sys.argv:
+        try:
+            from ui.app import main as ui_main
+            ui_main()
+            return 0
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        except Exception as exc:
+            print("Failed to run activation UI:", exc, file=sys.stderr)
             return 1
 
     argv = list(argv or sys.argv[1:])
