@@ -542,10 +542,16 @@ class LiveDetectionPage(QWidget):
         self._sync_label.setText(f"Last updated {time.strftime('%H:%M:%S')} · Status refreshes automatically")
 
         camera_statuses = self._backend_status.get("cameras") or []
-        status_by_id = {str(item.get("id")): item for item in camera_statuses}
+
+        def camera_key(value) -> str:
+            # Backend status may expose tenant-scoped IDs while the local UI
+            # database exposes the unscoped ID for the default tenant.
+            return str(value or "").split("::")[-1]
+
+        status_by_id = {camera_key(item.get("id")): item for item in camera_statuses}
         online_count = 0
         for camera_id, feed in self._feed_widgets.items():
-            stream = (status_by_id.get(camera_id) or {}).get("stream") or {}
+            stream = (status_by_id.get(camera_key(camera_id)) or {}).get("stream") or {}
             running = bool(stream.get("running"))
             last_state = str(stream.get("lastState") or "").lower()
             error = str(stream.get("lastError") or "")
@@ -594,7 +600,14 @@ class LiveDetectionPage(QWidget):
         return faces or (self._backend_status.get("lastFaces") or [])
 
     def _camera_faces(self, camera_id: str) -> list[dict]:
-        camera = next((item for item in (self._backend_status.get("cameras") or []) if str(item.get("id")) == camera_id), None)
+        camera_key = str(camera_id or "").split("::")[-1]
+        camera = next(
+            (
+                item for item in (self._backend_status.get("cameras") or [])
+                if str(item.get("id") or "").split("::")[-1] == camera_key
+            ),
+            None,
+        )
         camera_faces = (camera or {}).get("lastFaces") or []
         if camera_faces:
             return camera_faces
@@ -605,7 +618,7 @@ class LiveDetectionPage(QWidget):
             item for item in (self._backend_status.get("cameras") or [])
             if (item.get("stream") or {}).get("running")
         ]
-        if len(running_cameras) <= 1 or str((running_cameras[0] if running_cameras else {}).get("id")) == camera_id:
+        if len(running_cameras) <= 1 or str((running_cameras[0] if running_cameras else {}).get("id") or "").split("::")[-1] == camera_key:
             return self._backend_status.get("lastFaces") or []
         return []
 

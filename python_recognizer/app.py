@@ -782,7 +782,11 @@ class FaceEngine:
         if camera_role:
             cameras = [camera for camera in cameras if str(camera.get("camera_role") or "general") == camera_role]
         if camera_id:
-            cameras = [camera for camera in cameras if str(camera.get("id")) == camera_id]
+            requested_id = str(camera_id).split("::")[-1]
+            cameras = [
+                camera for camera in cameras
+                if str(camera.get("id") or "").split("::")[-1] == requested_id
+            ]
         return cameras
 
     def _restart_camera_workers(self, cameras: list[dict[str, Any]]) -> None:
@@ -1747,7 +1751,7 @@ engine = FaceEngine()
 app = FastAPI(title="Python Face Recognizer", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[item.strip() for item in os.getenv("FACEAGENT_CORS_ORIGINS", "http://127.0.0.1:5055,http://localhost:5055").split(",") if item.strip()],
+    allow_origins=[item.strip() for item in os.getenv("FACEAGENT_CORS_ORIGINS", "http://127.0.0.1:51873,http://localhost:51873").split(",") if item.strip()],
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "X-Tenant-Id"],
 )

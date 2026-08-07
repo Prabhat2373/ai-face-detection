@@ -38,7 +38,7 @@ def run_backend():
     uvicorn.run(
         backend_app,
         host=os.getenv("FACEAGENT_BACKEND_HOST", "127.0.0.1"),
-        port=int(os.getenv("FACEAGENT_BACKEND_PORT", "5055")),
+        port=int(os.getenv("FACEAGENT_BACKEND_PORT", "51873")),
         log_level=os.getenv("FACEAGENT_BACKEND_LOG_LEVEL", "warning"),
         access_log=False,
     )

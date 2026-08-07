@@ -526,7 +526,7 @@ class DashboardPage(QWidget):
             alarm_events = []
             active_alarms_count = 0
 
-        self.card_alerts.update_value(str(active_alarms_count), f"{active_alarms_count} alerts pending")
+        self.card_alerts.update_value(str(active_alarms_count), f"{active_alarms_count} alerts")
         self.card_cameras.update_value(str(cams_active), f"{cams_active} of {total_cams} active")
 
         self.last_updated_lbl.setText(f"Updated {datetime.now().strftime('%I:%M:%S %p')}")

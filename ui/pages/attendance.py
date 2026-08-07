@@ -44,6 +44,19 @@ class AttendancePage(QWidget):
         if self.isVisible() and self.date_input.date() == QDate.currentDate():
             self.refresh()
 
+    def showEvent(self, event):
+        """Always land on today's attendance when returning to this page."""
+        today = QDate.currentDate()
+        self.date_input.blockSignals(True)
+        self.date_input.setDate(today)
+        self.date_input.blockSignals(False)
+        if self.date_scope.currentData() != "single":
+            self.date_scope.blockSignals(True)
+            self.date_scope.setCurrentIndex(self.date_scope.findData("single"))
+            self.date_scope.blockSignals(False)
+        self.refresh()
+        super().showEvent(event)
+
     def _build_ui(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -246,17 +259,6 @@ class AttendancePage(QWidget):
             self.date_input.setEnabled(True)
             sel_date = self.date_input.date().toString("yyyy-MM-dd")
             attendance_all = self.db.list_attendance(sel_date, limit=2000)
-            if not attendance_all and not getattr(self, "_has_auto_landed_date", False):
-                recent_recs = self.db.list_attendance(None, limit=1)
-                if recent_recs:
-                    latest_rec = recent_recs[0]
-                    latest_ts = str(latest_rec.get("attendance_date") or latest_rec.get("last_appearance") or "")[:10]
-                    if latest_ts and len(latest_ts) == 10:
-                        self._has_auto_landed_date = True
-                        self.date_input.blockSignals(True)
-                        self.date_input.setDate(QDate.fromString(latest_ts, "yyyy-MM-dd"))
-                        self.date_input.blockSignals(False)
-                        attendance_all = self.db.list_attendance(latest_ts, limit=2000)
 
         employees = self.db.list_employees()
         cameras = self.db.list_cameras()
@@ -347,14 +349,31 @@ class AttendancePage(QWidget):
         dept_name = emp.get("department_name") if emp else (rec.get("last_department_name") or rec.get("first_department_name") or "")
         first = rec.get("first_appearance") or rec.get("first")
         last = rec.get("last_appearance") or rec.get("last")
-        camera = rec.get("last_camera_name") or rec.get("first_camera_name") or rec.get("last_camera_id") or rec.get("first_camera_id") or "-"
+        has_dedicated_checkin = rec.get("first_camera_role") == "check_in"
+        has_official_checkout = rec.get("last_camera_role") == "check_out"
+        official_camera_is_checkout = has_official_checkout
+        camera = (
+            (rec.get("last_camera_name") or rec.get("last_camera_id"))
+            if official_camera_is_checkout
+            else (rec.get("first_camera_name") or rec.get("first_camera_id"))
+        ) or "-"
         appearances = rec.get("appearances", 0)
         max_conf = rec.get("max_confidence")
-        snapshot_path = rec.get("last_snapshot_path") or rec.get("first_snapshot_path")
+        snapshot_path = (
+            (rec.get("last_snapshot_path") or rec.get("first_snapshot_path"))
+            if official_camera_is_checkout
+            else (rec.get("first_snapshot_path") or rec.get("last_snapshot_path"))
+        )
 
         if first:
             status = "Present"
-            last_display = last if (first != last or appearances > 1) else None
+            # A dedicated check-in record has no official checkout until a
+            # check-out camera produces one. General-camera activity must not
+            # appear as a checkout in that mode.
+            last_display = last if (
+                (first != last or appearances > 1)
+                and (not has_dedicated_checkin or has_official_checkout)
+            ) else None
         else:
             status = "Absent"
             first = None

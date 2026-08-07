@@ -25,6 +25,32 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+def _load_local_env() -> None:
+    """Load simple KEY=VALUE settings before backend modules are imported."""
+    candidates = [PROJECT_ROOT / ".env"]
+    if getattr(sys, "frozen", False):
+        candidates.insert(0, Path(sys.executable).resolve().parent / ".env")
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            pass
+        break
+
+
+_load_local_env()
+
+
 def ensure_venv_interpreter() -> None:
     """
     If a local virtual environment (.venv) exists next to the launcher, ensure we

@@ -8,7 +8,7 @@ from urllib import error as urllib_error
 from urllib import parse, request
 
 
-DEFAULT_BACKEND_URL = os.getenv("FACEAGENT_BACKEND_URL", "http://127.0.0.1:5055").rstrip("/")
+DEFAULT_BACKEND_URL = os.getenv("FACEAGENT_BACKEND_URL", "http://127.0.0.1:51873").rstrip("/")
 
 
 class BackendClient:

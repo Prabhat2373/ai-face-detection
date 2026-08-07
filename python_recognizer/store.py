@@ -874,6 +874,17 @@ class SQLiteStore:
 
     # ── Attendance ──────────────────────────────────────────────────────
 
+    def has_camera_role(self, role: str, tenant_id: str = "default") -> bool:
+        """Return whether an enabled dedicated attendance camera is configured."""
+        if role not in {"check_in", "check_out"}:
+            return False
+        with self._lock, self.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM cameras WHERE camera_role = ? AND enabled = 1 LIMIT 1",
+                (role,),
+            ).fetchone()
+        return row is not None
+
     def record_attendance(
         self,
         label: str,
@@ -891,6 +902,7 @@ class SQLiteStore:
     ) -> dict[str, Any]:
         role = camera_role if camera_role in {"general", "check_in", "check_out"} else "general"
         tenant = normalize_tenant_id(tenant_id)
+        dedicated_attendance = self.has_camera_role("check_in", tenant) or self.has_camera_role("check_out", tenant)
         attendance_date = timestamp[:10]
         stored_label = f"{tenant}::{label}::{attendance_date}"
         with self._lock, self.connection() as conn:
@@ -934,18 +946,28 @@ class SQLiteStore:
                 except Exception:
                     appearances = int(row["appearances"]) + 1
                 first_role = str(row["first_camera_role"] or "general")
+                # With dedicated attendance cameras, general cameras only
+                # contribute presence/activity. They must not overwrite the
+                # official check-in/check-out timestamps.
+                official_first = str(row["first_appearance"])
+                official_first_role = str(row["first_camera_role"] or "general")
+                if role == "check_in" and official_first_role == "general":
+                    official_first = timestamp
+                    official_first_role = role
+                official_last = timestamp if (not dedicated_attendance or role == "check_out") else str(row["last_appearance"])
+                official_last_role = role if (not dedicated_attendance or role == "check_out") else str(row["last_camera_role"] or "general")
                 record = {
                     "label": label,
                     "person_label": str(row["person_label"] or label),
                     "attendance_date": str(row["attendance_date"] or attendance_date),
-                    "first_appearance": str(row["first_appearance"]),
-                    "last_appearance": timestamp,
-                    "first_camera_role": first_role,
-                    "last_camera_role": role,
-                    "first_camera_id": row["first_camera_id"],
-                    "last_camera_id": camera_id,
-                    "first_camera_name": row["first_camera_name"],
-                    "last_camera_name": camera_name,
+                    "first_appearance": official_first,
+                    "last_appearance": official_last,
+                    "first_camera_role": official_first_role,
+                    "last_camera_role": official_last_role,
+                    "first_camera_id": camera_id if role == "check_in" and official_first == timestamp else row["first_camera_id"],
+                    "last_camera_id": camera_id if (not dedicated_attendance or role == "check_out") else row["last_camera_id"],
+                    "first_camera_name": camera_name if role == "check_in" and official_first == timestamp else row["first_camera_name"],
+                    "last_camera_name": camera_name if (not dedicated_attendance or role == "check_out") else row["last_camera_name"],
                     "first_department_id": row["first_department_id"],
                     "last_department_id": department_id,
                     "first_department_name": row["first_department_name"],
@@ -1009,10 +1031,19 @@ class SQLiteStore:
 
     def list_attendance(self, tenant_id: str = "default", attendance_date: str | None = None, limit: int | None = 2000) -> list[dict[str, Any]]:
         tenant = normalize_tenant_id(tenant_id)
-        prefix = f"{tenant}::"
-        
-        query = "SELECT * FROM attendance_records WHERE (label LIKE ? OR (label NOT LIKE '%::%' AND ? = 'default'))"
-        params: list[Any] = [f"{prefix}%", tenant]
+        # Attendance records from older and newer local builds may use
+        # different scoped-label formats (for example
+        # ``default::Prabhat::date`` and
+        # ``default::local_tenant::Prabhat::date``). The local desktop app
+        # has one database, so filter by the explicit date column instead of
+        # assuming one particular label prefix.
+        if tenant == "default":
+            query = "SELECT * FROM attendance_records WHERE 1 = 1"
+            params: list[Any] = []
+        else:
+            prefix = f"{tenant}::"
+            query = "SELECT * FROM attendance_records WHERE label LIKE ?"
+            params = [f"{prefix}%"]
         
         if attendance_date:
             query += " AND (attendance_date = ? OR last_appearance LIKE ? OR first_appearance LIKE ?)"
@@ -1023,6 +1054,12 @@ class SQLiteStore:
         
         with self._lock, self.connection() as conn:
             rows = conn.execute(query, params).fetchall()
+            camera_names: dict[str, str] = {}
+            camera_rows = conn.execute("SELECT id, name FROM cameras").fetchall()
+            for camera_row in camera_rows:
+                raw_id = str(camera_row["id"] or "")
+                camera_names[raw_id] = str(camera_row["name"] or raw_id)
+                camera_names[unscope_key(raw_id, tenant)] = str(camera_row["name"] or raw_id)
             results = []
             for row in rows:
                 payload = dict(row)
@@ -1031,6 +1068,16 @@ class SQLiteStore:
                 if not display_label:
                     display_label = unscope_key(label, tenant_id).rsplit("::", 1)[0]
                 payload["label"] = display_label
+                for id_field, name_field in (
+                    ("first_camera_id", "first_camera_name"),
+                    ("last_camera_id", "last_camera_name"),
+                ):
+                    raw_camera_id = str(payload.get(id_field) or "")
+                    if raw_camera_id:
+                        clean_camera_id = unscope_key(raw_camera_id, tenant)
+                        payload[id_field] = clean_camera_id
+                        if not payload.get(name_field):
+                            payload[name_field] = camera_names.get(raw_camera_id) or camera_names.get(clean_camera_id)
                 results.append(payload)
             return results
 

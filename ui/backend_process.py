@@ -11,9 +11,9 @@ from pathlib import Path
 from urllib import request
 
 
-BACKEND_URL = os.getenv("FACEAGENT_BACKEND_URL", "http://127.0.0.1:5055").rstrip("/")
+BACKEND_URL = os.getenv("FACEAGENT_BACKEND_URL", "http://127.0.0.1:51873").rstrip("/")
 BACKEND_HOST = os.getenv("FACEAGENT_BACKEND_HOST", "127.0.0.1")
-BACKEND_PORT = os.getenv("FACEAGENT_BACKEND_PORT", "5055")
+BACKEND_PORT = os.getenv("FACEAGENT_BACKEND_PORT", "51873")
 
 
 def is_backend_ready(timeout: float = 0.5) -> bool:
@@ -82,8 +82,18 @@ class BackendProcess:
         stderr = None
         if getattr(sys, "frozen", False):
             log_path = writable_app_dir() / "logs" / "backend.log"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_handle = open(log_path, "a", encoding="utf-8")
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_handle = open(log_path, "a", encoding="utf-8")
+            except OSError:
+                # Always retain diagnostics even if the installed data folder
+                # is unavailable or blocked by Windows permissions.
+                fallback_dir = Path(os.getenv("TEMP", str(Path.cwd()))) / "OtenceIntelligence"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                log_path = fallback_dir / "backend.log"
+                log_handle = open(log_path, "a", encoding="utf-8")
+            log_handle.write(f"\n--- Backend start {time.ctime()} ---\n")
+            log_handle.flush()
             stdout = log_handle
             stderr = subprocess.STDOUT
 
@@ -98,7 +108,9 @@ class BackendProcess:
             # Do not leave a crash-looping child behind. The caller can show a
             # single startup failure and the user can retry deliberately.
             self.stop()
-            raise RuntimeError("Local backend failed to become ready")
+            exit_code = self.process.poll()
+            detail = f" (exit code {exit_code})" if exit_code is not None else ""
+            raise RuntimeError(f"Local backend failed to become ready{detail}; see backend.log")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:

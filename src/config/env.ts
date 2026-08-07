@@ -10,7 +10,7 @@ const envSchema = z.object({
   DETECTION_THRESHOLD: z.coerce.number().min(0).max(1).default(0.75),
   MATCH_THRESHOLD: z.coerce.number().min(0).max(1).default(0.45),
   RECOGNITION_BACKEND: z.enum(["node", "python"]).default("node"),
-  PYTHON_RECOGNIZER_URL: z.string().url().default("http://localhost:5055"),
+  PYTHON_RECOGNIZER_URL: z.string().url().default("http://localhost:51873"),
   PYTHON_DB_PATH: z.string().default("/app/data/app.db"),
   DEFAULT_TENANT_ID: z.string().default("default"),
   LICENSE_FILE: z.string().default("./data/license.json"),
