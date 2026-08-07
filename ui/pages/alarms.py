@@ -163,7 +163,16 @@ class AlarmsPage(QWidget):
             faces = payload.get("faces") or []
             best_face = max(faces, key=lambda f: float(f.get("confidence") or 0.0), default={})
             confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0.0)
-            camera = payload.get("cameraName") or payload.get("cameraId") or payload.get("cameraRole") or "Front Gate"
+            camera_name = payload.get("cameraName")
+            camera_id = str(payload.get("cameraId") or "")
+            if not camera_name and camera_id:
+                clean_camera_id = camera_id.split("::")[-1]
+                try:
+                    camera_record = self.db.get_camera(clean_camera_id)
+                    camera_name = (camera_record or {}).get("name")
+                except Exception:
+                    camera_name = None
+            camera = camera_name or (camera_id.split("::")[-1] if camera_id else None) or payload.get("cameraRole") or "Front Gate"
             snapshot_path = snapshot.get("path")
             ts = row.get("created_at") or payload.get("timestamp") or ""
 
