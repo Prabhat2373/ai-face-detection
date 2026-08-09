@@ -171,6 +171,25 @@ BACKEND_STARTUP_TIMEOUT = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "
 _INSTANCE_MUTEX = None
 
 
+def _show_startup_error(title: str, message: str) -> None:
+    """Show a diagnostic error even when the packaged app has no console."""
+    log_lines = [
+        "Please send these logs to support:",
+        str(Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "OtenceIntelligence" / "logs" / "launcher.log"),
+        str(Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "FaceAgent" / "logs" / "backend.log"),
+        str(Path(os.getenv("TEMP", str(Path.cwd()))) / "OtenceIntelligence" / "backend.log"),
+    ]
+    text = f"{message}\n\n" + "\n".join(log_lines)
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
+            return
+        except Exception:
+            pass
+    print(f"{title}: {text}", file=sys.stderr)
+
+
 def _acquire_windows_instance_mutex() -> bool:
     """Allow only one user-facing launcher instance per Windows session."""
     global _INSTANCE_MUTEX
@@ -421,6 +440,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print("Backend is healthy.")
         except Exception as exc:
             print("Failed to start backend:", exc, file=sys.stderr)
+            _show_startup_error(
+                "Otence Intelligence could not start",
+                "The local recognition service could not start.\n\n"
+                f"Reason: {exc}\n\n"
+                "The application has stopped safely; no repeated background processes were left running.",
+            )
             return 12
     else:
         print("Launcher configured not to start backend (connect to external backend).")
@@ -562,6 +587,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         exit_code = int(exc.code or 0)
                 except Exception as exc:
                     print("Failed to launch UI in frozen bundle:", exc, file=sys.stderr)
+                    _show_startup_error(
+                        "Otence Intelligence could not open",
+                        f"The user interface failed to start.\n\nReason: {exc}",
+                    )
                     exit_code = 3
             else:
                 if not ui_script.exists():

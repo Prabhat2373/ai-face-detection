@@ -29,6 +29,7 @@ class BackendProcess:
 
     def __init__(self) -> None:
         self.process: subprocess.Popen | None = None
+        self.log_path: Path | None = None
 
     def start(self) -> None:
         if os.getenv("FACEAGENT_AUTO_START_BACKEND", "true").lower() not in {"1", "true", "yes", "on"}:
@@ -92,6 +93,7 @@ class BackendProcess:
                 fallback_dir.mkdir(parents=True, exist_ok=True)
                 log_path = fallback_dir / "backend.log"
                 log_handle = open(log_path, "a", encoding="utf-8")
+            self.log_path = log_path
             log_handle.write(f"\n--- Backend start {time.ctime()} ---\n")
             log_handle.flush()
             stdout = log_handle
@@ -110,7 +112,8 @@ class BackendProcess:
             self.stop()
             exit_code = self.process.poll()
             detail = f" (exit code {exit_code})" if exit_code is not None else ""
-            raise RuntimeError(f"Local backend failed to become ready{detail}; see backend.log")
+            log_hint = f"\nBackend log: {self.log_path}" if self.log_path else ""
+            raise RuntimeError(f"Local backend failed to become ready{detail}.{log_hint}")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
