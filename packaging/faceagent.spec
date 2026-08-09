@@ -5,7 +5,7 @@ PyInstaller spec for FaceAgent
 This spec bundles the launcher entrypoint and includes common data files
 that should be available at runtime:
 
-- python_recognizer/data/app.db
+- A clean database is created per installation; development app.db is never bundled.
 - licenses/public_key.pem
 - insightface_models/ (if present)
 - ffmpeg_runtime/ (if present)
@@ -56,6 +56,8 @@ def _add_data_if_exists(src: Path, dest: str) -> None:
 
 # Packaged sounds
 _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "check_in.mp3", "python_recognizer")
+_add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "check_out.mp3", "python_recognizer")
+_add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "alarm.wav", "python_recognizer")
 _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "mixkit-data-scaner-2847.wav", "python_recognizer")
 
 # Licensing public key

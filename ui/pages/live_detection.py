@@ -1,6 +1,7 @@
 """Live Detection page with camera feed viewer for the FaceAgent app."""
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -664,9 +665,13 @@ class LiveDetectionPage(QWidget):
 
     def _create_alarm_sound(self) -> QSoundEffect | None:
         configured = os.getenv("FACEAGENT_UI_ALARM_SOUND") or os.getenv("ALARM_SOUND_PATH")
-        alarm_path = Path(configured).expanduser() if configured else (
-            Path(__file__).resolve().parents[2] / "python_recognizer" / "alarm.wav"
-        )
+        if configured:
+            alarm_path = Path(configured).expanduser()
+        else:
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+            alarm_path = base / "python_recognizer" / "alarm.wav"
+            if not alarm_path.exists():
+                alarm_path = Path(__file__).resolve().parents[2] / "python_recognizer" / "alarm.wav"
         if not alarm_path.exists():
             return None
 
