@@ -190,11 +190,11 @@ class AttendancePage(QWidget):
         f_layout.addStretch()
 
         # Export & Refresh
-        self.export_btn = QPushButton("Export")
+        self.export_btn = QPushButton("Export Excel")
         self.export_btn.setProperty("class", "primary")
         self.export_btn.setMinimumWidth(100)
         self.export_btn.setStyleSheet("QPushButton { background:#1a73e8; color:#ffffff; border:1px solid #1a73e8; border-radius:7px; padding:9px 16px; font-weight:700; } QPushButton:hover { background:#1765cc; border-color:#1765cc; }")
-        self.export_btn.clicked.connect(self._export_csv)
+        self.export_btn.clicked.connect(self._export_excel)
         f_layout.addWidget(self.export_btn)
 
         self.refresh_btn = QPushButton("Refresh")
@@ -553,53 +553,92 @@ class AttendancePage(QWidget):
         except Exception:
             return str(iso_str)
 
-    def _export_csv(self):
-        """Export all filtered rows to CSV with native Save File dialog."""
+    def _export_excel(self):
+        """Export all currently filtered attendance rows to an Excel workbook."""
         try:
             if not hasattr(self, "_filtered_records") or not self._filtered_records:
-                QMessageBox.warning(self, "Export", "No records found to export.")
+                self._show_light_message(QMessageBox.Warning, "Export", "No records found to export.")
                 return
 
             sel_date = self.date_input.date().toString("yyyy-MM-dd")
-            default_filename = f"attendance-{sel_date}.csv"
+            default_filename = f"attendance-{sel_date}.xlsx"
 
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Attendance CSV",
+                "Save Attendance Excel File",
                 default_filename,
-                "CSV Files (*.csv);;All Files (*)"
+                "Excel Workbook (*.xlsx);;All Files (*)"
             )
             if not save_path:
                 return  # User cancelled the save dialog
 
-            import csv
-            with open(save_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Index", "Name", "Employee Code", "Department", "Check-In", "Check-Out", "Camera", "Status", "Confidence"])
-                for idx, rec in enumerate(self._filtered_records, start=1):
-                    name = rec.get("label") or ""
-                    code = rec.get("employee_code") or ""
-                    dept = rec.get("department") or ""
-                    first = self._format_dt(rec.get("first"))
-                    last = self._format_dt(rec.get("last"))
-                    cam = rec.get("camera") or "-"
-                    status = rec.get("status") or ""
-                    
-                    conf = rec.get("max_confidence")
-                    if conf is None:
-                        conf_text = "-"
-                    elif isinstance(conf, (int, float)):
-                        val = conf * 100.0 if conf <= 1.0 else conf
-                        conf_text = f"{val:.1f}%"
-                    else:
-                        conf_text = str(conf)
+            if not save_path.lower().endswith(".xlsx"):
+                save_path += ".xlsx"
 
-                    writer.writerow([idx, name, code, dept, first, last, cam, status, conf_text])
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.utils import get_column_letter
 
-            QMessageBox.information(
-                self,
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Attendance"
+            headers = ["Index", "Name", "Employee Code", "Department", "Check-In", "Check-Out", "Camera", "Status", "Confidence"]
+            sheet.append(headers)
+
+            for cell in sheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="1A73E8")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            sheet.freeze_panes = "A2"
+            sheet.auto_filter.ref = f"A1:I{len(self._filtered_records) + 1}"
+
+            for idx, rec in enumerate(self._filtered_records, start=1):
+                conf = rec.get("max_confidence")
+                if isinstance(conf, (int, float)):
+                    conf_value = (conf / 100.0) if conf > 1.0 else conf
+                else:
+                    conf_value = None
+                sheet.append([
+                    idx,
+                    rec.get("label") or "",
+                    rec.get("employee_code") or "",
+                    rec.get("department") or "",
+                    self._format_dt(rec.get("first")),
+                    self._format_dt(rec.get("last")),
+                    rec.get("camera") or "-",
+                    rec.get("status") or "",
+                    conf_value,
+                ])
+
+            for row in sheet.iter_rows(min_row=2, max_col=9):
+                row[0].alignment = Alignment(horizontal="center")
+                row[8].number_format = "0.0%"
+            widths = [10, 24, 18, 20, 16, 16, 24, 14, 14]
+            for index, width in enumerate(widths, start=1):
+                sheet.column_dimensions[get_column_letter(index)].width = width
+            sheet.row_dimensions[1].height = 24
+            workbook.save(save_path)
+
+            self._show_light_message(
+                QMessageBox.Information,
                 "Export Complete",
-                f"Attendance records successfully saved to:\n{save_path}"
+                f"Attendance Excel file successfully saved to:\n{save_path}",
             )
         except Exception as e:
-            QMessageBox.warning(self, "Export Error", str(e))
+            self._show_light_message(QMessageBox.Warning, "Export Error", str(e))
+
+    def _show_light_message(self, icon, title: str, message: str) -> None:
+        """Show attendance notifications consistently in light mode."""
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setFixedWidth(520)
+        box.setStyleSheet("""
+            QMessageBox { background: #ffffff; color: #111827; border: 1px solid #d1d5db; }
+            QMessageBox QLabel { color: #111827; background: #ffffff; font-size: 13px; font-weight: 600; min-width: 0px; max-width: 350px; }
+            QMessageBox QPushButton { background: #ffffff; color: #111827; border: 1px solid #9ca3af; border-radius: 6px; padding: 6px 18px; min-width: 64px; font-weight: 700; }
+            QMessageBox QPushButton:hover { background: #eef4ff; border-color: #1a73e8; }
+        """)
+        box.exec()
