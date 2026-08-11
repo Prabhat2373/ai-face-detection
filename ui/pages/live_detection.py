@@ -369,11 +369,10 @@ class LiveDetectionPage(QWidget):
         self._stat_known = StatCard("Known Detections", "0")
         self._stat_unknown = StatCard("Unknown Detections", "0")
         self._stat_registered = StatCard("Registered", "0")
-        self._stat_last = StatCard("Last Face", "-")
         self._stat_cameras = StatCard("Cameras Online", "0/0")
 
         for card in [self._stat_state, self._stat_known, self._stat_unknown,
-                     self._stat_registered, self._stat_last, self._stat_cameras]:
+                     self._stat_registered, self._stat_cameras]:
             self._status_layout.addWidget(card)
         layout.addLayout(self._status_layout)
 
@@ -382,19 +381,6 @@ class LiveDetectionPage(QWidget):
         self._camera_grid = QGridLayout()
         self._camera_grid.setSpacing(16)
         layout.addLayout(self._camera_grid)
-
-        # Detected faces panel
-        layout.addWidget(SectionHeader("Detected Faces", "Recently recognized faces"))
-        self._faces_panel = QFrame()
-        self._faces_panel.setProperty("class", "panel")
-        faces_layout = QVBoxLayout(self._faces_panel)
-        faces_layout.setContentsMargins(14, 14, 14, 14)
-        self._faces_label = QLabel("No faces detected yet")
-        self._faces_label.setAlignment(Qt.AlignCenter)
-        self._faces_label.setProperty("class", "muted")
-        self._faces_label.setStyleSheet("font-size: 13px; padding: 20px;")
-        faces_layout.addWidget(self._faces_label)
-        layout.addWidget(self._faces_panel)
 
         scroll.setWidget(self._container)
         main_layout = QVBoxLayout(self)
@@ -459,7 +445,7 @@ class LiveDetectionPage(QWidget):
     def _handle_local_refresh_error(self, exc: Exception):
         self._system_pill.set_text("UI data unavailable")
         self._system_pill.set_state("error")
-        self._faces_label.setText(f"Unable to load camera configuration: {exc}")
+        self._sync_label.setText(f"Unable to load camera configuration: {exc}")
 
     def _finish_local_refresh(self):
         self._local_refresh_active = False
@@ -468,7 +454,7 @@ class LiveDetectionPage(QWidget):
     def _open_fullscreen(self):
         cameras = [camera for camera in self.db.list_cameras() if camera.get("enabled")]
         if not cameras:
-            self._faces_label.setText("No enabled cameras available for full-screen view")
+            self._sync_label.setText("No enabled cameras available for full-screen view")
             return
         dialog = FullscreenCameraGrid(cameras, self.backend, self)
         self._fullscreen_dialog = dialog
@@ -581,17 +567,6 @@ class LiveDetectionPage(QWidget):
         self._stat_known.set_value(str(known_count))
         self._stat_unknown.set_value(str(unknown_count))
 
-        known = next((face for face in all_faces if (face.get("match") or {}).get("label")), None)
-        self._stat_last.set_value(str((known.get("match") or {}).get("label") or "-") if known else "-")
-
-        if all_faces:
-            labels = []
-            for face in all_faces[:8]:
-                match = face.get("match") or {}
-                labels.append(match.get("label") or "Unknown")
-            self._faces_label.setText(", ".join(labels))
-        else:
-            self._faces_label.setText("No faces detected yet")
         self._alert_for_unknown_faces(camera_statuses)
 
     def _all_current_faces(self, camera_statuses: list[dict]) -> list[dict]:
@@ -700,7 +675,6 @@ class LiveDetectionPage(QWidget):
         self._system_pill.set_text("Backend offline")
         self._system_pill.set_state("error")
         self._sync_label.setText("Unable to reach the detection service · Retry from Refresh")
-        self._faces_label.setText(f"Backend not reachable: {exc}")
 
     def _clear_layout(self, layout):
         while layout.count():
