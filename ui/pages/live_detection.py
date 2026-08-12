@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton, QComboBox, QGridLayout, QScrollArea, QDialog,
 )
 from PySide6.QtCore import QUrl, Qt, QTimer
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtMultimedia import QSoundEffect
 
@@ -20,14 +21,18 @@ from ..qt_workers import run_in_background
 
 
 class CameraFeedWidget(QFrame):
-    """A widget showing a single camera feed with overlay info."""
+    """Lightweight NVR-style widget showing an unannotated camera preview."""
 
     def __init__(self, camera: dict, frame_bytes: bytes | None = None, parent=None):
         super().__init__(parent)
         self.camera = camera
         self._single_camera_mode = False
         self._last_pixmap = QPixmap()
-        self._last_faces: list[dict] = []
+        self._stream_manager = QNetworkAccessManager(self)
+        self._stream_reply = None
+        self._stream_buffer = bytearray()
+        self._stream_base_url = ""
+        self._stream_stopped = False
         self.setStyleSheet("""
             CameraFeedWidget {
                 background: #050b14;
@@ -84,9 +89,61 @@ class CameraFeedWidget(QFrame):
 
         self.set_frame(frame_bytes)
 
+    def start_raw_stream(self, base_url: str) -> None:
+        """Display raw MJPEG frames without detection overlays."""
+        camera_id = str(self.camera.get("id") or "")
+        if not camera_id or self._stream_reply is not None:
+            return
+        self._stream_stopped = False
+        self._stream_base_url = base_url
+        from urllib.parse import quote
+        preview_fps = max(1, min(15, int(os.getenv("FACEAGENT_PREVIEW_FPS", "8"))))
+        url = f"{base_url.rstrip('/')}/stream.mjpg?cameraId={quote(camera_id, safe='')}&fps={preview_fps}"
+        reply = self._stream_manager.get(QNetworkRequest(QUrl(url)))
+        self._stream_reply = reply
+        reply.readyRead.connect(self._read_stream_data)
+        reply.finished.connect(self._stream_finished)
+
+    def _read_stream_data(self) -> None:
+        if self._stream_reply is None:
+            return
+        self._stream_buffer.extend(bytes(self._stream_reply.readAll()))
+        while True:
+            start = self._stream_buffer.find(b"\xff\xd8")
+            if start < 0:
+                self._stream_buffer = self._stream_buffer[-1:]
+                return
+            end = self._stream_buffer.find(b"\xff\xd9", start + 2)
+            if end < 0:
+                if start:
+                    del self._stream_buffer[:start]
+                return
+            frame = bytes(self._stream_buffer[start:end + 2])
+            del self._stream_buffer[:end + 2]
+            self.set_frame(frame)
+            self.set_frame_info("Live now")
+
+    def _stream_finished(self) -> None:
+        reply = self._stream_reply
+        self._stream_reply = None
+        self._stream_buffer.clear()
+        if reply is not None:
+            reply.deleteLater()
+        if not self.isHidden() and not self._stream_stopped:
+            self.set_frame_info("Stream reconnecting")
+            QTimer.singleShot(1000, lambda: self.start_raw_stream(self._stream_base_url))
+
+    def stop_raw_stream(self) -> None:
+        self._stream_stopped = True
+        if self._stream_reply is not None:
+            self._stream_reply.abort()
+            self._stream_reply = None
+        self._stream_buffer.clear()
+
     def update_faces(self, faces: list[dict]):
-        self._last_faces = faces
-        self._paint_frame()
+        # Detection results remain available to the page's counters, alarms,
+        # and attendance logic, but are not painted over the camera preview.
+        return
 
     def set_single_camera_mode(self, enabled: bool):
         self._single_camera_mode = enabled
@@ -111,8 +168,6 @@ class CameraFeedWidget(QFrame):
         self.frame_info.setText(text)
 
     def set_frame(self, frame_bytes: bytes | None, faces: list[dict] | None = None):
-        if faces is not None:
-            self._last_faces = faces
         if not frame_bytes:
             return
         pixmap = QPixmap()
@@ -124,6 +179,7 @@ class CameraFeedWidget(QFrame):
         self.feed_label.setText("")
 
     def closeEvent(self, event):
+        self.stop_raw_stream()
         super().closeEvent(event)
 
     def resizeEvent(self, event):
@@ -148,47 +204,12 @@ class CameraFeedWidget(QFrame):
         offset_y = (target_size.height() - scaled.height()) // 2
         painter.drawPixmap(offset_x, offset_y, scaled)
 
-        scale = min(
-            scaled.width() / max(1, self._last_pixmap.width()),
-            scaled.height() / max(1, self._last_pixmap.height()),
-        )
-        painter.setFont(QFont("Inter", 11, QFont.Bold))
-        for face in self._last_faces:
-            box = face.get("box") or {}
-            if not box and face.get("bbox"):
-                raw_box = face.get("bbox")
-                if isinstance(raw_box, (list, tuple)) and len(raw_box) >= 4:
-                    box = {
-                        "x": raw_box[0],
-                        "y": raw_box[1],
-                        "width": raw_box[2] - raw_box[0],
-                        "height": raw_box[3] - raw_box[1],
-                    }
-            match = face.get("match") or {}
-            known = bool(match.get("label"))
-            color = QColor("#22c55e" if known else "#f87171")
-            painter.setPen(QPen(color, 3))
-            x = offset_x + float(box.get("x") or 0) * scale
-            y = offset_y + float(box.get("y") or 0) * scale
-            w = float(box.get("width") or 0) * scale
-            h = float(box.get("height") or 0) * scale
-            if w <= 1 or h <= 1:
-                continue
-            painter.drawRect(int(x), int(y), int(w), int(h))
-
-            confidence = match.get("confidence", face.get("confidence", 0))
-            label = match.get("label") or "Unknown"
-            text = f"{label} · {round(float(confidence or 0) * 100)}%"
-            metrics = painter.fontMetrics()
-            text_width = metrics.horizontalAdvance(text) + 14
-            text_y = max(4, int(y) - 24)
-            painter.fillRect(int(x), text_y, text_width, 22, QColor("#166534" if known else "#7f1d1d"))
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(int(x) + 7, text_y + 16, text)
-
+        # Keep the preview raw. Recognition continues independently in the
+        # backend and its results are still used by business logic below the
+        # camera grid (counters, alarms, attendance, and detected faces).
         painter.end()
         self.feed_label.setPixmap(canvas)
-
+        return
 
 class FullscreenCameraGrid(QDialog):
     """Camera-only live grid shown without the rest of the application UI."""
@@ -198,44 +219,73 @@ class FullscreenCameraGrid(QDialog):
         self.backend = backend
         self.cameras = cameras
         self.feeds: dict[str, CameraFeedWidget] = {}
-        self.requests: set[str] = set()
         self.status_request_active = False
+        self.page_size = max(1, int(os.getenv("FACEAGENT_FULLSCREEN_PAGE_SIZE", "9")))
+        self.page_index = 0
         self.setWindowTitle("Otence Intelligence · Live Cameras")
         self.setStyleSheet("QDialog { background: #020617; }")
-        layout = QGridLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-        # Use a balanced grid: two cameras should be side by side, while
-        # larger camera sets use up to three columns.
-        columns = max(1, min(3, int(len(cameras) ** 0.5) + (1 if int(len(cameras) ** 0.5) ** 2 < len(cameras) else 0)))
-        for index, camera in enumerate(cameras):
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(12, 12, 12, 12)
+        self.main_layout.setSpacing(10)
+        self.grid = QGridLayout()
+        self.grid.setSpacing(12)
+        self.main_layout.addLayout(self.grid, 1)
+        controls = QHBoxLayout()
+        controls.addStretch()
+        self.page_label = QLabel()
+        self.page_label.setStyleSheet("color: #cbd5e1; font-size: 13px; font-weight: 700;")
+        self.previous_button = QPushButton("‹ Previous")
+        self.next_button = QPushButton("Next ›")
+        for button in (self.previous_button, self.next_button):
+            button.setMinimumWidth(110)
+            button.setStyleSheet("QPushButton { background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:8px 14px; font-weight:700; } QPushButton:disabled { color:#64748b; border-color:#1e293b; }")
+        self.previous_button.clicked.connect(lambda: self._change_page(-1))
+        self.next_button.clicked.connect(lambda: self._change_page(1))
+        controls.addWidget(self.page_label)
+        controls.addSpacing(12)
+        controls.addWidget(self.previous_button)
+        controls.addWidget(self.next_button)
+        self.main_layout.addLayout(controls)
+        self._render_page()
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.refresh_status)
+        self.status_timer.start(500)
+        self.refresh_status()
+
+    def _render_page(self) -> None:
+        for feed in self.feeds.values():
+            feed.stop_raw_stream()
+            feed.deleteLater()
+        self.feeds = {}
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        total_pages = max(1, (len(self.cameras) + self.page_size - 1) // self.page_size)
+        self.page_index = max(0, min(self.page_index, total_pages - 1))
+        visible = self.cameras[self.page_index * self.page_size:(self.page_index + 1) * self.page_size]
+        columns = max(1, min(3, int(len(visible) ** 0.5) + (1 if int(len(visible) ** 0.5) ** 2 < len(visible) else 0)))
+        for index, camera in enumerate(visible):
             feed = CameraFeedWidget(camera, parent=self)
-            # Every full-screen tile should size its image responsively. This
-            # keeps the native aspect ratio while using the available tile.
             feed.set_single_camera_mode(True)
             feed.setMinimumSize(360, 260)
             camera_id = str(camera.get("id"))
             self.feeds[camera_id] = feed
             row, column = divmod(index, columns)
-            layout.addWidget(feed, row, column)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh_frames)
-        self.timer.start(100)
-        self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.refresh_status)
-        self.status_timer.start(500)
-        self.refresh_frames()
+            self.grid.addWidget(feed, row, column)
+            feed.start_raw_stream(self.backend.base_url)
+        self.page_label.setText(f"Page {self.page_index + 1} of {total_pages} · {len(self.cameras)} cameras")
+        self.previous_button.setEnabled(self.page_index > 0)
+        self.next_button.setEnabled(self.page_index < total_pages - 1)
+
+    def _change_page(self, delta: int) -> None:
+        self.page_index += delta
+        self._render_page()
+        self.refresh_status()
 
     def refresh_frames(self):
-        for camera_id, feed in self.feeds.items():
-            if camera_id in self.requests:
-                continue
-            self.requests.add(camera_id)
-            run_in_background(
-                lambda camera_id=camera_id: self.backend.frame(camera_id=camera_id),
-                on_result=lambda frame, feed=feed: feed.set_frame(frame),
-                on_finished=lambda camera_id=camera_id: self.requests.discard(camera_id),
-            )
+        return
 
     def show_fullscreen(self):
         self.showFullScreen()
@@ -251,13 +301,14 @@ class FullscreenCameraGrid(QDialog):
         )
 
     def _apply_status(self, status):
-        by_id = {str(item.get("id")): item for item in status.get("cameras", [])}
+        by_id = {str(item.get("id") or "").split("::")[-1]: item for item in status.get("cameras", [])}
         for camera_id, feed in self.feeds.items():
-            camera = by_id.get(camera_id) or {}
+            camera = by_id.get(str(camera_id).split("::")[-1]) or {}
             feed.update_faces(camera.get("lastFaces") or [])
 
     def closeEvent(self, event):
-        self.timer.stop()
+        for feed in self.feeds.values():
+            feed.stop_raw_stream()
         self.status_timer.stop()
         super().closeEvent(event)
 
@@ -288,10 +339,6 @@ class LiveDetectionPage(QWidget):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_backend_status)
         self._refresh_timer.start(1000)
-        self._frame_timer = QTimer(self)
-        self._frame_timer.timeout.connect(self._refresh_frames)
-        frame_interval_ms = max(50, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "100")))
-        self._frame_timer.start(frame_interval_ms)
         self.refresh()
         QTimer.singleShot(1500, self._ensure_detection_started)
 
@@ -424,6 +471,7 @@ class LiveDetectionPage(QWidget):
         # Update camera grid only when the camera list changes.
         self._camera_signature = signature
         for old_feed in self._feed_widgets.values():
+            old_feed.stop_raw_stream()
             old_feed.deleteLater()
         self._feed_widgets = {}
         self._clear_layout(self._camera_grid)
@@ -437,6 +485,7 @@ class LiveDetectionPage(QWidget):
             for idx, cam in enumerate(enabled):
                 feed = CameraFeedWidget(cam)
                 feed.set_single_camera_mode(len(enabled) == 1)
+                feed.start_raw_stream(self.backend.base_url)
                 self._feed_widgets[str(cam.get("id"))] = feed
                 row, col = divmod(idx, cols)
                 self._camera_grid.addWidget(feed, row, col)
@@ -599,19 +648,9 @@ class LiveDetectionPage(QWidget):
         return []
 
     def _refresh_frames(self):
-        if not self._feed_widgets:
-            return
-        for camera_id, feed in self._feed_widgets.items():
-            if camera_id in self._frame_requests_active:
-                continue
-            self._frame_requests_active.add(camera_id)
-            run_in_background(
-                lambda camera_id=camera_id: self.backend.frame(camera_id=camera_id),
-                on_result=lambda frame, camera_id=camera_id, feed=feed: feed.set_frame(
-                    frame, self._camera_faces(camera_id)
-                ),
-                on_finished=lambda camera_id=camera_id: self._frame_requests_active.discard(camera_id),
-            )
+        # Preview tiles now consume one raw MJPEG connection each instead of
+        # repeatedly polling /frame.jpg. Detection remains backend-controlled.
+        return
 
     def _alert_for_unknown_faces(self, camera_statuses: list[dict]):
         now = int(time.time() * 1000)

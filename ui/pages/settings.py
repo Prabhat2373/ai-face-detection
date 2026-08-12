@@ -22,6 +22,7 @@ PERFORMANCE_PROFILES = {
         "max_dim": 360,
         "stream_fps": 3,
         "detection_fps": 1,
+        "recognition_concurrency": 1,
         "auto_start": False,
         "description": "Uses the least RAM and CPU. Starts cameras only when you press Start.",
     },
@@ -32,6 +33,7 @@ PERFORMANCE_PROFILES = {
         "max_dim": 480,
         "stream_fps": 5,
         "detection_fps": 3,
+        "recognition_concurrency": 2,
         "auto_start": False,
         "description": "Good recognition quality with moderate resource usage.",
     },
@@ -42,6 +44,7 @@ PERFORMANCE_PROFILES = {
         "max_dim": 640,
         "stream_fps": 10,
         "detection_fps": 4,
+        "recognition_concurrency": 3,
         "auto_start": True,
         "description": "Best recognition quality, but may be slow on 8 GB laptops.",
     },
@@ -52,8 +55,20 @@ PERFORMANCE_PROFILES = {
         "max_dim": 1080,
         "stream_fps": 15,
         "detection_fps": 6,
+        "recognition_concurrency": 4,
         "auto_start": True,
         "description": "Maximum accuracy with large detection sizes and fast tracking. Requires dedicated hardware.",
+    },
+    "scale": {
+        "label": "Large camera fleet (100+ cameras)",
+        "model": "buffalo_s",
+        "det_size": 320,
+        "max_dim": 360,
+        "stream_fps": 2,
+        "detection_fps": 1,
+        "recognition_concurrency": 1,
+        "auto_start": True,
+        "description": "Keeps all streams responsive and processes the newest frames without creating an inference backlog.",
     },
 }
 
@@ -186,6 +201,7 @@ class SettingsPage(QWidget):
             self.db.set_setting("DETECTION_IMAGE_MAX_DIM", str(profile["max_dim"]))
             self.db.set_setting("STREAM_FRAME_RATE", str(profile["stream_fps"]))
             self.db.set_setting("FRAME_RATE", str(profile["detection_fps"]))
+            self.db.set_setting("RECOGNITION_MAX_CONCURRENCY", str(profile["recognition_concurrency"]))
             self.db.set_setting("AUTO_START_DETECTION", "true" if profile["auto_start"] else "false")
             self.db.set_setting("ALARM_ENABLED", "true" if self.alarm_enabled.isChecked() else "false")
             restart_marker = writable_app_dir() / "restart-requested"

@@ -265,6 +265,12 @@ class FaceEngine:
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
         self._model_lock = threading.Lock()
+        configured_concurrency = max(
+            1,
+            parse_int_env_setting(self.store, "RECOGNITION_MAX_CONCURRENCY", 1),
+        )
+        self._recognition_slots = threading.BoundedSemaphore(configured_concurrency)
+        self._recognition_max_concurrency = configured_concurrency
         self._snapshot_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._last_snapshot_at = 0.0
@@ -328,6 +334,7 @@ class FaceEngine:
             "DETECTION_IMAGE_MAX_DIM": "360",
             "STREAM_FRAME_RATE": "3",
             "FRAME_RATE": "1",
+            "RECOGNITION_MAX_CONCURRENCY": "1",
             "AUTO_START_DETECTION": "false",
         }
         for key, value in defaults.items():
@@ -360,6 +367,7 @@ class FaceEngine:
             "faces": self._registered_face_count,
             "cameras": len(self.store.list_cameras(self.default_tenant_id)),
             "runningCameras": len(self._camera_workers),
+            "recognitionMaxConcurrency": self._recognition_max_concurrency,
             "alarmSoundAvailable": self.alarm_sound_path.exists(),
             "alarmEnabled": self.alarm_enabled,
             "alarmCooldownMs": self.alarm_cooldown_ms,
@@ -394,7 +402,7 @@ class FaceEngine:
                     },
                     "busy": False,
                     "processedFrames": int(frame_state.get("processedFrames") or 0),
-                    "droppedFrames": 0,
+                    "droppedFrames": int(frame_state.get("droppedFrames") or 0),
                     "lastFaces": frame_state.get("lastFaces") or [],
                     "lastDetection": frame_state.get("lastDetection"),
                 }
@@ -428,6 +436,7 @@ class FaceEngine:
                 ),
                 "cooldownMs": self.snapshot_cooldown_ms,
                 "recognitionBackend": "python",
+                "recognitionMaxConcurrency": self._recognition_max_concurrency,
                 "pythonRecognizerUrl": None,
                 "alarmEnabled": self.alarm_enabled,
             },
@@ -954,6 +963,20 @@ class FaceEngine:
                         time.sleep(max(0.0, 1.0 / float(frame_rate)))
                         continue
 
+                    # Do not let camera workers queue behind the recognizer.
+                    # Under load, skip this stale frame and keep the newest
+                    # frame available for the next scheduling opportunity.
+                    if not self._recognition_slots.acquire(blocking=False):
+                        self._set_camera_frame_state(
+                            camera_id,
+                            running=True,
+                            last_state="streaming; inference busy",
+                            latest_frame=latest_frame,
+                            increment_dropped=True,
+                        )
+                        time.sleep(max(0.0, 1.0 / float(frame_rate)))
+                        continue
+
                     self._set_camera_frame_state(
                         camera_id,
                         running=True,
@@ -978,6 +1001,8 @@ class FaceEngine:
                     except Exception as exc:  # noqa: BLE001
                         self._set_camera_frame_state(camera_id, increment_processed=True)
                         logger.warning("Camera frame processing failed: %s", {"cameraId": camera_id, "err": str(exc)})
+                    finally:
+                        self._recognition_slots.release()
                     time.sleep(max(0.0, 1.0 / float(frame_rate)))
             finally:
                 self._terminate_ffmpeg_stream(stream)
@@ -1113,6 +1138,7 @@ class FaceEngine:
         last_faces: list[dict[str, Any]] | None = None,
         last_detection: dict[str, Any] | None = None,
         increment_processed: bool = False,
+        increment_dropped: bool = False,
     ) -> None:
         with self._camera_frames_lock:
             state = self._camera_frames.setdefault(
@@ -1126,6 +1152,7 @@ class FaceEngine:
                     "lastFaces": [],
                     "lastDetection": None,
                     "processedFrames": 0,
+                    "droppedFrames": 0,
                 },
             )
             if running is not None:
@@ -1143,6 +1170,8 @@ class FaceEngine:
                 state["lastDetection"] = last_detection
             if increment_processed:
                 state["processedFrames"] = int(state.get("processedFrames") or 0) + 1
+            if increment_dropped:
+                state["droppedFrames"] = int(state.get("droppedFrames") or 0) + 1
 
     def _camera_status_snapshot(self, camera_id: str) -> dict[str, Any]:
         with self._camera_frames_lock:
@@ -2119,6 +2148,7 @@ async def attendance_csv(x_tenant_id: str | None = Header(default=None)) -> Resp
 async def stream_mjpg(
     cameraId: str | None = None,
     cameraRole: str | None = None,
+    fps: int = 8,
     x_tenant_id: str | None = Header(default=None),
 ) -> Response:
     camera = engine.stream_camera(cameraId, cameraRole)
@@ -2126,6 +2156,7 @@ async def stream_mjpg(
         raise HTTPException(status_code=404, detail="No enabled camera found")
 
     boundary = b"--frame\r\n"
+    preview_interval = 1.0 / max(1, min(int(fps or 8), 15))
     headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
         "Pragma": "no-cache",
@@ -2136,16 +2167,20 @@ async def stream_mjpg(
     async def frame_iterator() -> Any:
         camera_id = str(camera["id"])
         last_sent_at = 0.0
+        last_sent_monotonic = 0.0
         try:
             while True:
                 with engine._camera_frames_lock:
                     frame_state = dict(engine._camera_frames.get(camera_id, {}))
                 frame_bytes = frame_state.get("latest_frame")
                 latest_at = float(frame_state.get("latest_at") or 0.0)
-                if not frame_bytes or latest_at <= last_sent_at:
+                now_monotonic = time.monotonic()
+                if (not frame_bytes or latest_at <= last_sent_at or
+                        now_monotonic - last_sent_monotonic < preview_interval):
                     await asyncio.sleep(0.04)
                     continue
                 last_sent_at = latest_at
+                last_sent_monotonic = now_monotonic
                 yield boundary
                 yield b"Content-Type: image/jpeg\r\n"
                 yield f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8")
