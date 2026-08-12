@@ -1110,10 +1110,10 @@ class SQLiteStore:
             return [dict(row) for row in rows]
 
     def list_alarm_events(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return recent unknown person alarm events for the alarms page."""
+        """Return recent unknown-person and weapon alarm events."""
         with self._lock, self.connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM sync_events WHERE event_type = 'alarm.triggered' ORDER BY id DESC LIMIT ?",
+                "SELECT * FROM sync_events WHERE event_type IN ('alarm.triggered', 'weapon.detected') ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [dict(row) for row in rows]

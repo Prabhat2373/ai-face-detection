@@ -47,9 +47,9 @@ class AlarmsPage(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
-        title = QLabel("Unknown Person Alarms")
+        title = QLabel("Security Alerts")
         title.setProperty("class", "page-title")
-        desc = QLabel("Real-time security alerts triggered when an unrecognized face is detected")
+        desc = QLabel("Real-time alerts for unknown persons and detected weapons")
         desc.setProperty("class", "page-desc")
         text_col.addWidget(title)
         text_col.addWidget(desc)
@@ -61,7 +61,7 @@ class AlarmsPage(QWidget):
         controls.setSpacing(8)
 
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["All Unknown Alarms", "Today Only"])
+        self._filter_combo.addItems(["All Security Alerts", "Weapons Only", "Unknown Persons Only", "Today Only"])
         self._filter_combo.setMinimumWidth(160)
         self._filter_combo.currentTextChanged.connect(self._apply_filter)
         controls.addWidget(QLabel("Filter:"))
@@ -84,7 +84,7 @@ class AlarmsPage(QWidget):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
 
-        self._total_alarms_card = self._mini_stat("Total Unknown Alarms", "0", "#ef4444")
+        self._total_alarms_card = self._mini_stat("Total Security Alerts", "0", "#ef4444")
         self._today_alarms_card = self._mini_stat("Active Today", "0", "#f97316")
 
         stats_row.addWidget(self._total_alarms_card)
@@ -150,7 +150,7 @@ class AlarmsPage(QWidget):
 
         for row in sync_rows:
             event_type = row.get("event_type", "")
-            if event_type != "alarm.triggered":
+            if event_type not in {"alarm.triggered", "weapon.detected"}:
                 continue
 
             payload_text = row.get("payload", "{}")
@@ -161,8 +161,10 @@ class AlarmsPage(QWidget):
 
             snapshot = payload.get("snapshot") or {}
             faces = payload.get("faces") or []
+            weapons = payload.get("weapons") or []
             best_face = max(faces, key=lambda f: float(f.get("confidence") or 0.0), default={})
-            confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0.0)
+            best_weapon = max(weapons, key=lambda f: float(f.get("confidence") or 0.0), default={})
+            confidence = float(best_weapon.get("confidence") or best_face.get("confidence") or snapshot.get("confidence") or 0.0)
             camera_name = payload.get("cameraName")
             camera_id = str(payload.get("cameraId") or "")
             if not camera_name and camera_id:
@@ -192,7 +194,9 @@ class AlarmsPage(QWidget):
                 "is_today": is_today,
                 "confidence": confidence,
                 "snapshot_path": snapshot_path,
-                "status": "Triggered",
+                "status": "Weapon detected" if event_type == "weapon.detected" else "Unknown person",
+                "type": "weapon" if event_type == "weapon.detected" else "unknown",
+                "weapon_labels": ", ".join(str(item.get("label") or "weapon") for item in weapons),
             })
 
         # Sort by primary key ID descending so newest inserted alarm is strictly first
@@ -214,7 +218,11 @@ class AlarmsPage(QWidget):
         if not hasattr(self, "_events"):
             return
         filter_text = self._filter_combo.currentText()
-        if filter_text == "Today Only":
+        if filter_text == "Weapons Only":
+            filtered = [e for e in self._events if e.get("type") == "weapon"]
+        elif filter_text == "Unknown Persons Only":
+            filtered = [e for e in self._events if e.get("type") == "unknown"]
+        elif filter_text == "Today Only":
             filtered = [e for e in self._events if e.get("is_today")]
         else:
             filtered = self._events
@@ -261,8 +269,11 @@ class AlarmsPage(QWidget):
             else:
                 self._table.setItem(row_idx, 1, QTableWidgetItem("-"))
 
-            # Camera
-            self._table.setItem(row_idx, 2, QTableWidgetItem(str(evt.get("camera") or "-")))
+            # Camera / detected object
+            camera_text = str(evt.get("camera") or "-")
+            if evt.get("type") == "weapon" and evt.get("weapon_labels"):
+                camera_text = f"{camera_text} — {evt['weapon_labels']}"
+            self._table.setItem(row_idx, 2, QTableWidgetItem(camera_text))
 
             # Timestamp
             ts = evt.get("timestamp", "")
@@ -284,7 +295,7 @@ class AlarmsPage(QWidget):
             self._table.setItem(row_idx, 4, item_conf)
 
             # Status (Red Triggered Badge)
-            item_status = QTableWidgetItem("Triggered")
+            item_status = QTableWidgetItem(str(evt.get("status") or "Triggered"))
             item_status.setBackground(QBrush(QColor(254, 226, 226)))
             item_status.setForeground(QBrush(QColor(220, 38, 38)))
             self._table.setItem(row_idx, 5, item_status)

@@ -109,8 +109,12 @@ class BackendProcess:
         if not self._wait_until_ready():
             # Do not leave a crash-looping child behind. The caller can show a
             # single startup failure and the user can retry deliberately.
+            # Capture the exit code before stop() clears self.process.  Calling
+            # poll() after stop() used to raise an unhelpful NoneType error and
+            # hid the actual backend startup problem from the user.
+            process = self.process
+            exit_code = process.poll() if process is not None else None
             self.stop()
-            exit_code = self.process.poll()
             detail = f" (exit code {exit_code})" if exit_code is not None else ""
             log_hint = f"\nBackend log: {self.log_path}" if self.log_path else ""
             raise RuntimeError(f"Local backend failed to become ready{detail}.{log_hint}")

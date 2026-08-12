@@ -77,6 +77,11 @@ except ModuleNotFoundError:
         unscope_key,
     )
 
+try:
+    from python_recognizer.weapon_detector import WeaponDetector
+except ModuleNotFoundError:
+    from weapon_detector import WeaponDetector  # type: ignore
+
 
 logger = logging.getLogger("python_recognizer")
 if not logging.getLogger().handlers:
@@ -269,6 +274,9 @@ class FaceEngine:
         self._sync_lock = threading.Lock()
         self._last_snapshot_at = 0.0
         self._model = self._load_model()
+        self.weapon_detector = WeaponDetector()
+        self.weapon_cooldown_ms = parse_int_env("WEAPON_DETECTION_COOLDOWN_MS", 10_000)
+        self._last_weapon_alert_at: dict[str, float] = {}
         threading.Thread(target=self._cleanup_snapshots, daemon=True).start()
         if self.backup_enabled:
             self._backup_thread = threading.Thread(target=self._backup_loop, daemon=True)
@@ -473,6 +481,8 @@ class FaceEngine:
         with self._model_lock:
             faces = self._model.get(model_image)
 
+        weapon_detections = self.weapon_detector.detect(model_image)
+
         # Scale detection coordinates back to original image size
         if scale != 1.0 and faces:
             for face in faces:
@@ -512,6 +522,21 @@ class FaceEngine:
         clean_cam_id = camera_id.split("::")[-1] if camera_id and "::" in camera_id else camera_id
         camera_record = self.store.get_camera(clean_cam_id, tenant) if clean_cam_id else None
         camera_name = str(camera_record.get("name") or "") if camera_record else None
+        if weapon_detections:
+            now_ms = time.time() * 1000.0
+            last_weapon = self._last_weapon_alert_at.get(camera_key, 0.0)
+            if now_ms - last_weapon >= self.weapon_cooldown_ms:
+                self._last_weapon_alert_at[camera_key] = now_ms
+                weapon_snapshot = self._maybe_save_snapshot(image, detected, force=True, reason="weapon")
+                self.store.enqueue_sync_event("weapon.detected", {
+                    "reason": "weapon_detected",
+                    "cameraRole": camera_role,
+                    "cameraId": camera_id,
+                    "cameraName": camera_name,
+                    "timestamp": iso_now(),
+                    "weapons": weapon_detections,
+                    "snapshot": weapon_snapshot,
+                }, tenant)
         if unknown_faces:
             now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
             last_logged = float(self._camera_alarm_state[camera_key].get("last_logged_alarm_at") or 0.0)
@@ -586,6 +611,7 @@ class FaceEngine:
         return {
             "state": state,
             "faces": detected,
+            "weapons": weapon_detections,
             "snapshot": snapshot,
         }
 

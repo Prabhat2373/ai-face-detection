@@ -61,6 +61,12 @@ Required variables:
 - `BACKUP_INTERVAL_SECONDS`: Time between automatic backups. Defaults to `86400` seconds.
 - `BACKUP_RETENTION_COUNT`: Number of recent database backups to keep. Defaults to `7`.
 - `BACKUP_PATH`: Optional backup directory. Defaults to the application data `backups` directory.
+- `WEAPON_DETECTION_ENABLED`: Enables optional YOLO weapon detection. Defaults to `false`.
+- `WEAPON_DETECTION_MODEL`: Path to a YOLO weapon model (`.pt`). Defaults to `models/weapon.pt`.
+- `WEAPON_DETECTION_CONFIDENCE`: Minimum weapon confidence. Defaults to `0.55`.
+- `WEAPON_DETECTION_COOLDOWN_MS`: Minimum time between repeated weapon alerts per camera. Defaults to `10000`.
+
+Weapon detection is independent of face recognition. Install the Python requirements, place a compatible trained YOLO model at the configured path, and set `WEAPON_DETECTION_ENABLED=true`. Alerts appear in the desktop Security Alerts page and include the detected model label, confidence, camera, timestamp, and snapshot.
 
 ## Install
 
