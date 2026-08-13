@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QScrollArea, QComboBox, QMessageBox, QDialog,
+    QScrollArea, QComboBox, QListView, QMessageBox, QDialog,
 )
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QPixmap
@@ -63,6 +63,15 @@ class AlarmsPage(QWidget):
         self._filter_combo = QComboBox()
         self._filter_combo.addItems(["All Unknown Alarms", "Today Only"])
         self._filter_combo.setMinimumWidth(160)
+        # Force the popup list to use the application's light theme even when
+        # the operating system is configured for dark mode.
+        self._filter_combo.setView(QListView())
+        filter_view = self._filter_combo.view()
+        if filter_view is not None:
+            filter_view.setStyleSheet(
+                "background: #ffffff; color: #111827; "
+                "selection-background-color: #e8f0fe; selection-color: #111827;"
+            )
         self._filter_combo.currentTextChanged.connect(self._apply_filter)
         controls.addWidget(QLabel("Filter:"))
         controls.addWidget(self._filter_combo)
