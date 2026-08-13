@@ -47,9 +47,9 @@ class AlarmsPage(QWidget):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
-        title = QLabel("Unknown Person Alarms")
+        title = QLabel("Security Alarms & Weapon Detections")
         title.setProperty("class", "page-title")
-        desc = QLabel("Real-time security alerts triggered when an unrecognized face is detected")
+        desc = QLabel("Real-time security alerts for unknown persons and weapon/threat detections")
         desc.setProperty("class", "page-desc")
         text_col.addWidget(title)
         text_col.addWidget(desc)
@@ -61,10 +61,13 @@ class AlarmsPage(QWidget):
         controls.setSpacing(8)
 
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["All Unknown Alarms", "Today Only"])
-        self._filter_combo.setMinimumWidth(160)
-        # Force the popup list to use the application's light theme even when
-        # the operating system is configured for dark mode.
+        self._filter_combo.addItems([
+            "All Security Alarms",
+            "Weapon Threats Only",
+            "Unknown Persons Only",
+            "Today Only"
+        ])
+        self._filter_combo.setMinimumWidth(180)
         self._filter_combo.setView(QListView())
         filter_view = self._filter_combo.view()
         if filter_view is not None:
@@ -93,27 +96,29 @@ class AlarmsPage(QWidget):
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
 
-        self._total_alarms_card = self._mini_stat("Total Unknown Alarms", "0", "#ef4444")
+        self._weapon_alarms_card = self._mini_stat("Weapon Threats", "0", "#dc2626")
+        self._unknown_alarms_card = self._mini_stat("Unknown Persons", "0", "#ef4444")
         self._today_alarms_card = self._mini_stat("Active Today", "0", "#f97316")
 
-        stats_row.addWidget(self._total_alarms_card)
+        stats_row.addWidget(self._weapon_alarms_card)
+        stats_row.addWidget(self._unknown_alarms_card)
         stats_row.addWidget(self._today_alarms_card)
         stats_row.addStretch()
         layout.addLayout(stats_row)
 
-        # Unknown Alarms Table
+        # Security Alarms Table
         self._table = QTableWidget()
         self._table.setColumnCount(7)
         self._table.setHorizontalHeaderLabels([
-            "#", "Snapshot", "Camera", "Timestamp", "Confidence", "Status", "Action"
+            "#", "Snapshot", "Alarm Type & Target", "Camera / Location", "Timestamp", "Confidence", "Action"
         ])
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # #
         header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Snapshot
-        header_view.setSectionResizeMode(2, QHeaderView.Stretch)           # Camera
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Timestamp
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Confidence
-        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Status
+        header_view.setSectionResizeMode(2, QHeaderView.Stretch)           # Type & Target
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Camera
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Timestamp
+        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Confidence
         header_view.setSectionResizeMode(6, QHeaderView.Fixed)             # Action
         self._table.setColumnWidth(6, 110)
 
@@ -137,7 +142,7 @@ class AlarmsPage(QWidget):
         card = QFrame()
         card.setProperty("class", "stat-card")
         card.setMinimumHeight(80)
-        card.setMinimumWidth(220)
+        card.setMinimumWidth(200)
         clayout = QVBoxLayout(card)
         clayout.setContentsMargins(16, 12, 16, 12)
         clayout.setSpacing(4)
@@ -152,9 +157,9 @@ class AlarmsPage(QWidget):
         return card
 
     def _fetch_unknown_alarms(self):
-        """Fetch unknown person alarm events from the database."""
+        """Fetch security alarm events (unknown persons & weapons) from the database."""
         events = []
-        sync_rows = self.db.list_alarm_events(250)
+        sync_rows = self.db.list_alarm_events(300)
         today_str = datetime.now().astimezone().strftime("%Y-%m-%d")
 
         for row in sync_rows:
@@ -168,10 +173,21 @@ class AlarmsPage(QWidget):
             except Exception:
                 payload = {}
 
+            reason = payload.get("reason", "unknown_person")
             snapshot = payload.get("snapshot") or {}
             faces = payload.get("faces") or []
-            best_face = max(faces, key=lambda f: float(f.get("confidence") or 0.0), default={})
-            confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0.0)
+            weapons = payload.get("weapons") or []
+            
+            if reason == "weapon_detected":
+                first_weapon = weapons[0] if weapons else {}
+                weapon_cls = first_weapon.get("class") or snapshot.get("weaponClass") or "Weapon"
+                confidence = float(first_weapon.get("confidence") or snapshot.get("confidence") or 0.0)
+                alarm_title = f"⚠️ WEAPON: {weapon_cls.upper()}"
+            else:
+                best_face = max(faces, key=lambda f: float(f.get("confidence") or 0.0), default={})
+                confidence = float(best_face.get("confidence") or snapshot.get("confidence") or 0.0)
+                alarm_title = "👤 Unknown Person"
+
             camera_name = payload.get("cameraName")
             camera_id = str(payload.get("cameraId") or "")
             if not camera_name and camera_id:
@@ -196,6 +212,8 @@ class AlarmsPage(QWidget):
 
             events.append({
                 "id": int(row.get("id") or 0),
+                "reason": reason,
+                "alarm_title": alarm_title,
                 "camera": camera,
                 "timestamp": ts,
                 "is_today": is_today,
@@ -213,17 +231,23 @@ class AlarmsPage(QWidget):
         self._apply_filter()
 
         # Update stats
-        total_alarms = len(self._events)
+        weapon_alarms = sum(1 for e in self._events if e.get("reason") == "weapon_detected")
+        unknown_alarms = sum(1 for e in self._events if e.get("reason") != "weapon_detected")
         today_alarms = sum(1 for e in self._events if e.get("is_today"))
 
-        self._total_alarms_card.layout().itemAt(1).widget().setText(str(total_alarms))
+        self._weapon_alarms_card.layout().itemAt(1).widget().setText(str(weapon_alarms))
+        self._unknown_alarms_card.layout().itemAt(1).widget().setText(str(unknown_alarms))
         self._today_alarms_card.layout().itemAt(1).widget().setText(str(today_alarms))
 
     def _apply_filter(self):
         if not hasattr(self, "_events"):
             return
         filter_text = self._filter_combo.currentText()
-        if filter_text == "Today Only":
+        if filter_text == "Weapon Threats Only":
+            filtered = [e for e in self._events if e.get("reason") == "weapon_detected"]
+        elif filter_text == "Unknown Persons Only":
+            filtered = [e for e in self._events if e.get("reason") != "weapon_detected"]
+        elif filter_text == "Today Only":
             filtered = [e for e in self._events if e.get("is_today")]
         else:
             filtered = self._events
@@ -237,7 +261,7 @@ class AlarmsPage(QWidget):
     def _apply_pagination(self):
         events = self.pagination.get_slice(self._filtered_events)
         if not events:
-            render_empty_table_placeholder(self._table, col_count=7, message="No unknown person alarms found")
+            render_empty_table_placeholder(self._table, col_count=7, message="No security or weapon alarms found")
             return
 
         self._table.clearSpans()
@@ -255,6 +279,7 @@ class AlarmsPage(QWidget):
 
             # Snapshot thumbnail
             snap_path = evt.get("snapshot_path")
+            reason = evt.get("reason", "unknown_person")
             if snap_path and os.path.exists(snap_path):
                 lbl_snap = QLabel()
                 pix = QPixmap(snap_path)
@@ -262,16 +287,25 @@ class AlarmsPage(QWidget):
                     pix = pix.scaled(44, 44, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                     lbl_snap.setPixmap(pix)
                     lbl_snap.setCursor(Qt.PointingHandCursor)
-                    lbl_snap.setToolTip("Click to view unknown snapshot")
-                    lbl_snap.mousePressEvent = lambda event, path=snap_path: self._show_snapshot_dialog(path)
+                    lbl_snap.setToolTip("Click to view snapshot")
+                    lbl_snap.mousePressEvent = lambda event, path=snap_path, r=reason: self._show_snapshot_dialog(path, r)
                     self._table.setCellWidget(row_idx, 1, lbl_snap)
                 else:
                     self._table.setItem(row_idx, 1, QTableWidgetItem("-"))
             else:
                 self._table.setItem(row_idx, 1, QTableWidgetItem("-"))
 
+            # Alarm Type & Target
+            alarm_title = evt.get("alarm_title", "Security Alarm")
+            item_target = QTableWidgetItem(alarm_title)
+            if reason == "weapon_detected":
+                item_target.setForeground(QBrush(QColor(185, 28, 28)))
+            else:
+                item_target.setForeground(QBrush(QColor(17, 24, 39)))
+            self._table.setItem(row_idx, 2, item_target)
+
             # Camera
-            self._table.setItem(row_idx, 2, QTableWidgetItem(str(evt.get("camera") or "-")))
+            self._table.setItem(row_idx, 3, QTableWidgetItem(str(evt.get("camera") or "-")))
 
             # Timestamp
             ts = evt.get("timestamp", "")
@@ -282,7 +316,7 @@ class AlarmsPage(QWidget):
                     formatted_ts = dt.astimezone().strftime("%d %b %Y %I:%M:%S %p")
                 except Exception:
                     formatted_ts = str(ts)
-            self._table.setItem(row_idx, 3, QTableWidgetItem(formatted_ts))
+            self._table.setItem(row_idx, 4, QTableWidgetItem(formatted_ts))
 
             # Confidence
             conf = evt.get("confidence", 0.0)
@@ -290,13 +324,7 @@ class AlarmsPage(QWidget):
             conf_text = f"{val:.1f}%" if val > 0 else "-"
             item_conf = QTableWidgetItem(conf_text)
             item_conf.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self._table.setItem(row_idx, 4, item_conf)
-
-            # Status (Red Triggered Badge)
-            item_status = QTableWidgetItem("Triggered")
-            item_status.setBackground(QBrush(QColor(254, 226, 226)))
-            item_status.setForeground(QBrush(QColor(220, 38, 38)))
-            self._table.setItem(row_idx, 5, item_status)
+            self._table.setItem(row_idx, 5, item_conf)
 
             # Action button
             if snap_path and os.path.exists(snap_path):
@@ -312,21 +340,28 @@ class AlarmsPage(QWidget):
                     "QPushButton { background: #1a73e8; color: #ffffff; font-weight: bold; border: none; border-radius: 7px; padding: 2px 2px; margin: 0px; min-width: 64px; max-width: 64px; min-height: 24px; max-height: 24px; } "
                     "QPushButton:hover { background: #1557b0; }"
                 )
-                btn_view.clicked.connect(lambda _, path=snap_path: self._show_snapshot_dialog(path))
+                btn_view.clicked.connect(lambda _, path=snap_path, r=reason: self._show_snapshot_dialog(path, r))
                 action_layout.addWidget(btn_view)
                 self._table.setCellWidget(row_idx, 6, action_widget)
             else:
                 self._table.setItem(row_idx, 6, QTableWidgetItem("-"))
 
-    def _show_snapshot_dialog(self, path: str):
-        """Display unknown person snapshot modal dialog."""
+    def _show_snapshot_dialog(self, path: str, reason: str = "unknown_person"):
+        """Display alarm detection snapshot modal dialog."""
         dialog = QDialog(self)
-        dialog.setWindowTitle("Unknown Person Detection Snapshot")
+        if reason == "weapon_detected":
+            dialog.setWindowTitle("Weapon Threat Detection Snapshot")
+        else:
+            dialog.setWindowTitle("Unknown Person Detection Snapshot")
         dialog.setMinimumSize(640, 480)
         d_layout = QVBoxLayout(dialog)
 
-        title = QLabel("⚠️ Unknown Person Alarm Snapshot")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #dc2626; margin-bottom: 8px;")
+        if reason == "weapon_detected":
+            title = QLabel("🚨 WEAPON THREAT ALARM SNAPSHOT")
+            title.setStyleSheet("font-size: 16px; font-weight: bold; color: #b91c1c; margin-bottom: 8px;")
+        else:
+            title = QLabel("⚠️ Unknown Person Alarm Snapshot")
+            title.setStyleSheet("font-size: 16px; font-weight: bold; color: #dc2626; margin-bottom: 8px;")
         d_layout.addWidget(title, alignment=Qt.AlignCenter)
 
         img_lbl = QLabel()
@@ -341,6 +376,7 @@ class AlarmsPage(QWidget):
         btn_close.clicked.connect(dialog.accept)
         d_layout.addWidget(btn_close, alignment=Qt.AlignCenter)
         dialog.exec()
+
 
     def _clear_events(self):
         box = QMessageBox(self)

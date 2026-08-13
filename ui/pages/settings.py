@@ -123,17 +123,21 @@ class SettingsPage(QWidget):
         performance_layout.addRow(self.profile_description)
         form_layout.addRow(group_performance)
 
-        # --- Alarms Group ---
-        group_alarm = QGroupBox("Alarms")
+        # --- Alarms & Weapon Detection Group ---
+        group_alarm = QGroupBox("Alarms & Threat Detection")
         group_alarm.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 12px; padding-top: 16px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
         alarm_layout = QFormLayout(group_alarm)
 
-        self.alarm_enabled = QCheckBox("Enable Audio Alarm")
+        self.alarm_enabled = QCheckBox("Enable Audio Alarm Sound")
         alarm_layout.addRow(self.alarm_enabled)
+
+        self.weapon_enabled = QCheckBox("Enable Real-time Weapon Detection (YOLO)")
+        alarm_layout.addRow(self.weapon_enabled)
 
         form_layout.addRow(group_alarm)
 
         self._main_layout.addWidget(form_container)
+
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -175,6 +179,9 @@ class SettingsPage(QWidget):
         alarm_val = self.db.get_setting("ALARM_ENABLED", "false").lower() == "true"
         self.alarm_enabled.setChecked(alarm_val)
 
+        weapon_val = self.db.get_setting("WEAPON_DETECTION_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+        self.weapon_enabled.setChecked(weapon_val)
+
     def on_save(self):
         """Write UI widget values to the DB settings."""
         try:
@@ -188,7 +195,9 @@ class SettingsPage(QWidget):
             self.db.set_setting("FRAME_RATE", str(profile["detection_fps"]))
             self.db.set_setting("AUTO_START_DETECTION", "true" if profile["auto_start"] else "false")
             self.db.set_setting("ALARM_ENABLED", "true" if self.alarm_enabled.isChecked() else "false")
+            self.db.set_setting("WEAPON_DETECTION_ENABLED", "true" if self.weapon_enabled.isChecked() else "false")
             restart_marker = writable_app_dir() / "restart-requested"
+
             restart_marker.write_text("settings", encoding="utf-8")
             self._show_light_message(
                 QMessageBox.Information,

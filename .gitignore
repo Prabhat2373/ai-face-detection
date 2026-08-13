@@ -142,7 +142,15 @@ insightface_models/.cache/
 snapshots/
 packaging/tmp/
 packaging/*.dmg
-packaging/*.zip
+# Neural Network Weights & Models (YOLO / PyTorch / ONNX / TensorRT)
+*.pt
+*.onnx
+*.engine
+*.tflite
+*.safetensors
+*.bin
+python_recognizer/*.pt
 
 # Logs produced during packaging
 packaging/logs/
+

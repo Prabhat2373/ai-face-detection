@@ -290,10 +290,11 @@ class LiveDetectionPage(QWidget):
         self._refresh_timer.start(1000)
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._refresh_frames)
-        frame_interval_ms = max(50, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "100")))
+        frame_interval_ms = max(33, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "33")))
         self._frame_timer.start(frame_interval_ms)
         self.refresh()
         QTimer.singleShot(1500, self._ensure_detection_started)
+
 
     def _build_ui(self):
         scroll = QScrollArea()

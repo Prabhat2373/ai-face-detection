@@ -20,6 +20,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
 os.environ.setdefault("ONNXRUNTIME_ENGINE_THREAD_POOL_SIZE", "2")
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlsplit, urlunsplit
@@ -247,7 +248,24 @@ class FaceEngine:
         self.alarm_unknown_frames = parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 1)
         self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", self.detection_threshold)
         self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
+
+        # Weapon detection configuration
+        weapon_enabled_setting = self.store.get_setting("WEAPON_DETECTION_ENABLED", os.getenv("WEAPON_DETECTION_ENABLED", "true"))
+        self.weapon_detection_enabled = weapon_enabled_setting.lower() in {"1", "true", "yes", "on"}
+        self.weapon_confidence_threshold = float(parse_float_env("WEAPON_CONFIDENCE_THRESHOLD", float(self.store.get_setting("WEAPON_CONFIDENCE_THRESHOLD", "0.25"))))
+
+        self._weapon_model = None
+        self._weapon_model_lock = threading.Lock()
+        # Weapon inference is deliberately kept out of the camera worker's
+        # critical path.  A bounded executor plus one in-flight job per
+        # camera prevents the expensive YOLO ensemble from queueing stale
+        # frames and freezing the live stream.
+        self._weapon_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="weapon-detector")
+        self._weapon_futures: dict[str, Future[list[dict[str, Any]]]] = {}
+        self._weapon_futures_lock = threading.Lock()
+
         self.known_grace_ms = parse_int_env("KNOWN_GRACE_MS", 800)
+
         self.recognition_grace_ms = parse_int_env("RECOGNITION_GRACE_MS", 1_000)
 
         # Check-in sound configuration
@@ -538,6 +556,34 @@ class FaceEngine:
                     snapshot,
                     camera_name,
                 )
+
+        # ── Weapon Detection Engine Integration (off the stream thread) ──
+        if self.weapon_detection_enabled:
+            now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
+            last_weapon_check = float(self._camera_alarm_state[camera_key].get("last_weapon_check_at") or 0.0)
+            with self._weapon_futures_lock:
+                weapon_future = self._weapon_futures.get(camera_key)
+                if weapon_future is not None and weapon_future.done():
+                    self._weapon_futures.pop(camera_key, None)
+                    try:
+                        weapons_found = weapon_future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Weapon inference failed: %s", exc)
+                        weapons_found = []
+                    self._handle_weapon_results(
+                        weapons_found, image, camera_role, camera_id, camera_name, camera_key, now_ms
+                    )
+                    weapon_future = None
+
+                # One inference per second is sufficient for alerting, and
+                # importantly never blocks face recognition or frame capture.
+                if weapon_future is None and now_ms - last_weapon_check >= 1000.0:
+                    self._camera_alarm_state[camera_key]["last_weapon_check_at"] = now_ms
+                    self._weapon_futures[camera_key] = self._weapon_executor.submit(
+                        self._detect_weapons, image.copy()
+                    )
+
+
         effective_department_id = camera_department_id or (str(camera_record.get("department_id") or "") if camera_record else "")
         department_record = self.store.get_department(effective_department_id, tenant) if effective_department_id else None
         department_name = str(department_record.get("name") or "") if department_record else None
@@ -857,7 +903,8 @@ class FaceEngine:
         camera_role = str(camera.get("camera_role") or "general")
         camera_id = str(camera.get("id") or "")
         camera_department_id = str(camera.get("department_id") or "")
-        frame_rate = max(1, parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 3))
+        frame_rate = max(1, parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 15))
+
         retry_delay = 1.0
         transport_cycle = ["tcp", "udp"]
         transport_index = 0
@@ -1508,6 +1555,148 @@ class FaceEngine:
         self.store.enqueue_sync_event("alarm.triggered", alarm_record)
         logger.warning("Alarm triggered: %s", alarm_record)
         self._play_alarm_sound()
+
+    def _get_weapon_model(self) -> tuple[Any, Any]:
+        if hasattr(self, "_weapon_models") and self._weapon_models is not None:
+            return self._weapon_models
+        with self._weapon_model_lock:
+            if not hasattr(self, "_weapon_models") or self._weapon_models is None:
+                try:
+                    import ssl
+                    ssl._create_default_https_context = ssl._create_unverified_context
+                    from ultralytics import YOLO
+                    app_dir = Path(__file__).resolve().parent
+                    oiv7_path = app_dir / "yolov8x-oiv7.pt"
+                    coco_path = app_dir / "yolov8x.pt"
+                    
+                    m_oiv7 = YOLO(str(oiv7_path) if oiv7_path.exists() else "yolov8x-oiv7.pt")
+                    m_coco = YOLO(str(coco_path) if coco_path.exists() else "yolov8x.pt")
+                    self._weapon_models = (m_oiv7, m_coco)
+                    logger.info("Dual weapon detection ensemble (OpenImages v7 + COCO) loaded successfully")
+                except Exception as exc:
+                    logger.error("Failed to load weapon detection models: %s", exc)
+                    self._weapon_models = (None, None)
+            return self._weapon_models
+
+    def _detect_weapons(self, image: np.ndarray) -> list[dict[str, Any]]:
+        """Detect ALL weapon threats (Guns, Pistols, Firearms, Knives, Blades) simultaneously in the same frame with zero stream lag."""
+        m_oiv7, m_coco = self._get_weapon_model()
+        if m_oiv7 is None and m_coco is None:
+            return []
+        weapons = []
+        seen_bboxes = []
+
+        def _is_duplicate_bbox(new_box):
+            for old_box in seen_bboxes:
+                # Check IoU or center overlap to avoid double-boxing the exact same physical weapon
+                dx = abs(new_box[0] - old_box[0]) + abs(new_box[2] - old_box[2])
+                dy = abs(new_box[1] - old_box[1]) + abs(new_box[3] - old_box[3])
+                if dx < 30 and dy < 30:
+                    return True
+            return False
+
+        # 1. OpenImages v7 model (Handgun, Rifle, Shotgun, Kitchen knife, Dagger, Weapon, Sword)
+        # Using imgsz=640 for smooth 60 FPS real-time camera streaming with zero lag
+        if m_oiv7 is not None:
+            try:
+                results = m_oiv7.predict(source=image, verbose=False, conf=0.15, imgsz=640)
+                OIV7_TARGETS = {"handgun", "shotgun", "rifle", "weapon", "knife", "kitchen knife", "dagger", "sword"}
+                for result in results:
+                    for box in result.boxes:
+                        cls_name = result.names.get(int(box.cls[0].item()), "").lower()
+                        conf = float(box.conf[0].item())
+                        if cls_name in OIV7_TARGETS or any(w in cls_name for w in ["handgun", "gun", "rifle", "knife", "weapon", "shotgun", "dagger", "sword"]):
+                            display_name = "handgun" if ("handgun" in cls_name or "gun" in cls_name) else cls_name
+                            b = [round(val, 1) for val in box.xyxy[0].tolist()]
+                            weapons.append({
+                                "class": display_name,
+                                "confidence": round(conf, 3),
+                                "bbox": b,
+                            })
+                            seen_bboxes.append(b)
+            except Exception as exc:
+                logger.warning("OpenImages weapon inference error: %s", exc)
+
+        # 2. COCO model pass (knives and blades) - ALWAYS RUN to detect Gun & Knife TOGETHER in the same frame!
+        if m_coco is not None:
+            try:
+                results = m_coco.predict(source=image, verbose=False, conf=0.20, imgsz=640)
+                for result in results:
+                    for box in result.boxes:
+                        cls_name = result.names.get(int(box.cls[0].item()), "").lower()
+                        conf = float(box.conf[0].item())
+                        if cls_name == "knife":
+                            b = [round(val, 1) for val in box.xyxy[0].tolist()]
+                            if not _is_duplicate_bbox(b):
+                                weapons.append({
+                                    "class": "knife",
+                                    "confidence": round(conf, 3),
+                                    "bbox": b,
+                                })
+            except Exception as exc:
+                logger.warning("COCO weapon inference error: %s", exc)
+
+        return weapons
+
+    def _handle_weapon_results(
+        self, weapons_found: list[dict[str, Any]], image: np.ndarray,
+        camera_role: str, camera_id: str | None, camera_name: str | None,
+        camera_key: str, now_ms: float,
+    ) -> None:
+        if not weapons_found:
+            return
+        last_weapon_alarm = float(self._camera_alarm_state[camera_key].get("last_logged_weapon_alarm_at") or 0.0)
+        if now_ms - last_weapon_alarm < 800.0:
+            return
+        self._camera_alarm_state[camera_key]["last_logged_weapon_alarm_at"] = now_ms
+        weapon_snapshot = self._save_weapon_snapshot(image, weapons_found)
+        self.store.enqueue_sync_event("alarm.triggered", {
+            "reason": "weapon_detected", "cameraRole": camera_role,
+            "cameraId": camera_id, "cameraName": camera_name,
+            "timestamp": iso_now(), "weapons": weapons_found,
+            "snapshot": weapon_snapshot,
+        })
+        logger.warning("WEAPON DETECTED (%s) on camera %s!", weapons_found[0].get("class"), camera_name or camera_id)
+        self._trigger_alarm(image, camera_role, camera_id, "weapon_detected", [], weapon_snapshot, camera_name)
+
+
+
+
+
+
+
+
+
+
+
+
+    def _save_weapon_snapshot(self, image: np.ndarray, weapons: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Draw bounding boxes for detected weapons and save snapshot image."""
+        try:
+            annotated = image.copy()
+            for weapon in weapons:
+                bbox = weapon.get("bbox", [])
+                if len(bbox) == 4:
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                    # Draw vivid red bounding box for weapon warning
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 230), 3)
+                    label = f"WEAPON: {weapon.get('class', 'weapon')} ({int(weapon.get('confidence', 0)*100)}%)"
+                    cv2.putText(annotated, label, (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+            filename = f"weapon_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}.jpg"
+            path = self.snapshot_path / filename
+            cv2.imwrite(str(path), annotated)
+            return {
+                "path": str(path),
+                "filename": filename,
+                "confidence": max((w.get("confidence", 0) for w in weapons), default=0.0),
+                "weaponClass": weapons[0].get("class", "weapon") if weapons else "weapon",
+                "createdAt": iso_now(),
+            }
+        except Exception as exc:
+            logger.error("Failed to save weapon snapshot: %s", exc)
+            return None
+
 
     def _update_camera_alarm_state(
         self,

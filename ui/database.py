@@ -203,8 +203,8 @@ class Database:
     def list_all_sync_events(self, limit: int = 20) -> list[dict]:
         return self._store.list_all_sync_events(limit)
 
-    def list_alarm_events(self, limit: int = 100) -> list[dict]:
-        return self._store.list_alarm_events(limit)
+    def list_alarm_events(self, limit: int = 100, reason: str | None = None) -> list[dict]:
+        return self._store.list_alarm_events(limit, reason=reason)
 
     def clear_sync_events(self) -> None:
         self._store.clear_sync_events()
