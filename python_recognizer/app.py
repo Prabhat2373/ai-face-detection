@@ -219,10 +219,13 @@ class FaceEngine:
         self.snapshot_cooldown_ms = parse_int_env("SNAPSHOT_COOLDOWN_MS", 10_000)
         # Settings saved by the desktop UI take precedence over environment
         # defaults. Low-memory mode is the safe default for 8 GB machines.
-        configured_det_size = parse_int_env_setting(
-            self.store,
+        configured_det_size = parse_int_env(
             "INSIGHTFACE_DET_SIZE",
-            parse_int_env("INSIGHTFACE_DET_WIDTH", 320),
+            parse_int_env_setting(
+                self.store,
+                "INSIGHTFACE_DET_SIZE",
+                parse_int_env("INSIGHTFACE_DET_WIDTH", 640),
+            ),
         )
         self.det_size = (
             configured_det_size,
@@ -322,12 +325,15 @@ class FaceEngine:
         if self.store.get_setting("PERFORMANCE_PROFILE", None) is not None:
             return
         defaults = {
-            "PERFORMANCE_PROFILE": "low",
+            # The low-memory profile used to shrink 720p/1080p camera frames to
+            # 360px before detection. That makes a person in the background only
+            # a handful of pixels tall and guarantees that they are discarded.
+            "PERFORMANCE_PROFILE": "balanced",
             "INSIGHTFACE_MODEL": "buffalo_s",
-            "INSIGHTFACE_DET_SIZE": "320",
-            "DETECTION_IMAGE_MAX_DIM": "360",
-            "STREAM_FRAME_RATE": "3",
-            "FRAME_RATE": "1",
+            "INSIGHTFACE_DET_SIZE": "640",
+            "DETECTION_IMAGE_MAX_DIM": "720",
+            "STREAM_FRAME_RATE": "5",
+            "FRAME_RATE": "3",
             "AUTO_START_DETECTION": "false",
         }
         for key, value in defaults.items():
@@ -456,7 +462,13 @@ class FaceEngine:
 
         # Optimize: Downscale high-resolution frames to a maximum dimension for fast inference.
         # This keeps CPU usage extremely low while maintaining standard face detection accuracy.
-        max_dim = int(self.store.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
+        # Environment configuration is the deployment-level override. The
+        # previous store-first lookup kept an old 320px setting active even
+        # after changing the performance profile.
+        max_dim = parse_int_env(
+            "DETECTION_IMAGE_MAX_DIM",
+            parse_int_env_setting(self.store, "DETECTION_IMAGE_MAX_DIM", 720),
+        )
         h, w = image.shape[:2]
         scale = 1.0
         if max(h, w) > max_dim:
@@ -483,9 +495,9 @@ class FaceEngine:
                 if hasattr(face, "landmark") and face.landmark is not None:
                     face.landmark = face.landmark / scale
 
-        min_face_size = max(20, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 40))
+        min_face_size = max(16, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 24))
         quality_faces = []
-        for face in self._filter_faces(faces):
+        for face in self._filter_faces(faces, min_face_size=min_face_size):
             bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
             if len(bbox) >= 4 and min(bbox[2] - bbox[0], bbox[3] - bbox[1]) >= min_face_size:
                 quality_faces.append(face)
@@ -1035,7 +1047,10 @@ class FaceEngine:
                     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
                 except ImportError:
                     ffmpeg_path = "ffmpeg"
-        max_dim = int(self.store.get_setting("DETECTION_IMAGE_MAX_DIM", "640"))
+        max_dim = parse_int_env(
+            "DETECTION_IMAGE_MAX_DIM",
+            parse_int_env_setting(self.store, "DETECTION_IMAGE_MAX_DIM", 720),
+        )
         args = [
             ffmpeg_path,
             "-hide_banner",
@@ -1200,7 +1215,7 @@ class FaceEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Auto-start cameras failed: %s", exc)
 
-    def _filter_faces(self, faces: list[Any]) -> list[Any]:
+    def _filter_faces(self, faces: list[Any], min_face_size: int = 24) -> list[Any]:
         filtered = []
         for face in faces:
             score = float(getattr(face, "det_score", 0.0))
@@ -1214,7 +1229,9 @@ class FaceEngine:
             x1, y1, x2, y2 = bbox[:4]
             w = max(0.0, x2 - x1)
             h = max(0.0, y2 - y1)
-            if w < 40.0 or h < 40.0:
+            # Keep this aligned with the configurable minimum below. A hardcoded
+            # 40px gate here previously made MIN_FACE_SIZE ineffective.
+            if w < float(min_face_size) or h < float(min_face_size):
                 continue
             aspect_ratio = w / max(1.0, h)
             if aspect_ratio < 0.4 or aspect_ratio > 2.2:
@@ -1226,7 +1243,7 @@ class FaceEngine:
                 try:
                     left_eye, right_eye, nose, left_mouth, right_mouth = np.asarray(kps[:5], dtype=np.float32)
                     eye_dist = float(np.linalg.norm(right_eye - left_eye))
-                    if eye_dist < 8.0:
+                    if eye_dist < max(3.0, min(w, h) * 0.12):
                         continue
                     eye_y = float((left_eye[1] + right_eye[1]) / 2.0)
                     mouth_y = float((left_mouth[1] + right_mouth[1]) / 2.0)

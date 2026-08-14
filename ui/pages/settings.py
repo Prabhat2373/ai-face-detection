@@ -18,12 +18,12 @@ PERFORMANCE_PROFILES = {
     "low": {
         "label": "Low memory (recommended for 8 GB laptops)",
         "model": "buffalo_s",
-        "det_size": 320,
-        "max_dim": 360,
+        "det_size": 480,
+        "max_dim": 640,
         "stream_fps": 3,
         "detection_fps": 1,
         "auto_start": False,
-        "description": "Uses the least RAM and CPU. Starts cameras only when you press Start.",
+        "description": "Uses less RAM and CPU while retaining enough image detail for background faces.",
     },
     "balanced": {
         "label": "Balanced (recommended for most computers)",
