@@ -9,6 +9,7 @@ from urllib import parse, request
 
 
 DEFAULT_BACKEND_URL = os.getenv("FACEAGENT_BACKEND_URL", "http://127.0.0.1:51873").rstrip("/")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 
 
 class BackendClient:
@@ -108,7 +109,10 @@ class BackendClient:
 
     def _json(self, method: str, path: str, payload: dict | None = None, timeout: float | None = None) -> dict:
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "X-Tenant-Id": DEFAULT_TENANT_ID,
+        }
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"

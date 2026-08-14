@@ -485,6 +485,30 @@ class FaceEngine:
         with self._model_lock:
             faces = self._model.get(model_image)
 
+            # Efficient long-range fallback: most frames use one inference
+            # pass. Only frames with no detected face get a 1.5x pass, which
+            # gives small hallway faces more pixels without doubling CPU use
+            # for every frame on low-end machines.
+            if not faces:
+                model_h, model_w = model_image.shape[:2]
+                fallback_max_dim = min(960, max_dim * 2)
+                fallback_scale = min(1.5, fallback_max_dim / max(model_h, model_w))
+                if fallback_scale > 1.0:
+                    fallback = cv2.resize(
+                        model_image,
+                        (int(model_w * fallback_scale), int(model_h * fallback_scale)),
+                        interpolation=cv2.INTER_CUBIC,
+                    )
+                    faces = self._model.get(fallback)
+                    if faces:
+                        for face in faces:
+                            if getattr(face, "bbox", None) is not None:
+                                face.bbox = face.bbox / fallback_scale
+                            if getattr(face, "kps", None) is not None:
+                                face.kps = face.kps / fallback_scale
+                            if getattr(face, "landmark", None) is not None:
+                                face.landmark = face.landmark / fallback_scale
+
         # Scale detection coordinates back to original image size
         if scale != 1.0 and faces:
             for face in faces:
@@ -495,7 +519,7 @@ class FaceEngine:
                 if hasattr(face, "landmark") and face.landmark is not None:
                     face.landmark = face.landmark / scale
 
-        min_face_size = max(16, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 24))
+        min_face_size = max(16, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 20))
         quality_faces = []
         for face in self._filter_faces(faces, min_face_size=min_face_size):
             bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
@@ -722,6 +746,20 @@ class FaceEngine:
     def register_employee_photos(self, employee_id: str, images: list[np.ndarray], tenant_id: str | None = None) -> dict[str, Any]:
         tenant = tenant_id or self.default_tenant_id
         employee = next((item for item in self.store.list_employees(tenant) if str(item["id"]) == employee_id), None)
+        # Older desktop builds saved employee rows under the local `default`
+        # tenant while the recognizer used DEFAULT_TENANT_ID. Accept an ID
+        # from either local tenant so photo registration can repair that state.
+        if employee is None:
+            for fallback_tenant in ("default", "default_local_tenant"):
+                if fallback_tenant == tenant:
+                    continue
+                employee = next(
+                    (item for item in self.store.list_employees(fallback_tenant) if str(item["id"]) == employee_id),
+                    None,
+                )
+                if employee is not None:
+                    tenant = fallback_tenant
+                    break
         if employee is None:
             raise HTTPException(status_code=404, detail="Employee not found")
         added = 0
@@ -1215,7 +1253,7 @@ class FaceEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Auto-start cameras failed: %s", exc)
 
-    def _filter_faces(self, faces: list[Any], min_face_size: int = 24) -> list[Any]:
+    def _filter_faces(self, faces: list[Any], min_face_size: int = 20) -> list[Any]:
         filtered = []
         for face in faces:
             score = float(getattr(face, "det_score", 0.0))
@@ -1295,7 +1333,11 @@ class FaceEngine:
         y = float(box.get("y") or 0.0)
         w = float(box.get("width") or 0.0)
         h = float(box.get("height") or 0.0)
-        if w < 35 or h < 35:
+        # Keep alert eligibility aligned with recognition. A separate 35px
+        # gate caused small faces to appear in Live Detection but never create
+        # an unknown-person alert.
+        min_alert_face_size = max(16, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 20))
+        if w < min_alert_face_size or h < min_alert_face_size:
             return False
         if x < 0 or y < 0:
             return False
