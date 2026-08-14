@@ -26,6 +26,15 @@ jobs:
           python -m pip install -r python_recognizer/requirements.txt
           python -m pip install PySide6 pyinstaller cryptography
 
+      - name: Vendor InsightFace model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force insightface_models/models/buffalo_s | Out-Null
+          Invoke-WebRequest `
+            -Uri https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip `
+            -OutFile $env:TEMP\buffalo_s.zip
+          Expand-Archive $env:TEMP\buffalo_s.zip -DestinationPath insightface_models/models/buffalo_s -Force
+
       - name: Build PyInstaller bundle
         run: |
           python packaging/build_all.py --clean

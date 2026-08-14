@@ -167,7 +167,10 @@ except Exception:
 
 DEFAULT_LICENSE_FILENAME = "license.key"
 DEFAULT_TRIAL_DAYS = 14
-BACKEND_STARTUP_TIMEOUT = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "10.0"))
+# Model initialization can be slow on first launch (especially on Windows).
+# Production bundles vendor the model, but keep a generous default for older
+# bundles and machines that need to populate the local cache.
+BACKEND_STARTUP_TIMEOUT = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "900.0"))
 _INSTANCE_MUTEX = None
 
 

@@ -66,6 +66,13 @@ _add_data_if_exists(PROJECT_ROOT / "licenses" / "public_key.pem", "licenses")
 # InsightFace model directory (if vendored)
 _add_data_if_exists(PROJECT_ROOT / "insightface_models", "insightface_models")
 
+# Also vendor the developer/CI cache when a model has been downloaded there.
+# InsightFace expects root/models/<model-name>, so preserve that layout.
+for _model_name in ("buffalo_s", "buffalo_l"):
+    _cached_model = Path.home() / ".cache" / "insightface" / "models" / _model_name
+    if _cached_model.exists():
+        _add_data_if_exists(_cached_model, f"insightface_models/models/{_model_name}")
+
 # ffmpeg runtime (optional)
 _add_data_if_exists(PROJECT_ROOT / "ffmpeg_runtime", "ffmpeg_runtime")
 
