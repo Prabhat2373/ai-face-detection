@@ -131,6 +131,10 @@ class SettingsPage(QWidget):
         self.alarm_enabled = QCheckBox("Enable Audio Alarm")
         alarm_layout.addRow(self.alarm_enabled)
 
+        self.preview_enabled = QCheckBox("Enable Camera Preview")
+        self.preview_enabled.setToolTip("Preview is optional and does not affect face detection or alarms.")
+        alarm_layout.addRow(self.preview_enabled)
+
         form_layout.addRow(group_alarm)
 
         self._main_layout.addWidget(form_container)
@@ -174,6 +178,8 @@ class SettingsPage(QWidget):
 
         alarm_val = self.db.get_setting("ALARM_ENABLED", "false").lower() == "true"
         self.alarm_enabled.setChecked(alarm_val)
+        preview_val = self.db.get_setting("CAMERA_PREVIEW_ENABLED", "false").lower() == "true"
+        self.preview_enabled.setChecked(preview_val)
 
     def on_save(self):
         """Write UI widget values to the DB settings."""
@@ -188,6 +194,7 @@ class SettingsPage(QWidget):
             self.db.set_setting("FRAME_RATE", str(profile["detection_fps"]))
             self.db.set_setting("AUTO_START_DETECTION", "true" if profile["auto_start"] else "false")
             self.db.set_setting("ALARM_ENABLED", "true" if self.alarm_enabled.isChecked() else "false")
+            self.db.set_setting("CAMERA_PREVIEW_ENABLED", "true" if self.preview_enabled.isChecked() else "false")
             restart_marker = writable_app_dir() / "restart-requested"
             restart_marker.write_text("settings", encoding="utf-8")
             self._show_light_message(

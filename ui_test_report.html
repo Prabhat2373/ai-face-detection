@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PySide6 UI Automated Test Report</title>
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --pass-bg: #dcfce7;
+            --pass-text: #15803d;
+            --fail-bg: #fee2e2;
+            --fail-text: #b91c1c;
+            --primary: #2563eb;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 32px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        header {
+            margin-bottom: 28px;
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+            color: var(--text-main);
+        }
+        .meta {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .card-value {
+            font-size: 26px;
+            font-weight: 800;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        th, td {
+            padding: 14px 18px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: #f1f5f9;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .badge-pass {
+            background: var(--pass-bg);
+            color: var(--pass-text);
+        }
+        .badge-fail {
+            background: var(--fail-bg);
+            color: var(--fail-text);
+        }
+        .error-trace {
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PySide6 UI Automated Test Report</h1>
+            <div class="meta">Executed on 2026-08-14 22:00:45 • Isolated Database Test Suite</div>
+        </header>
+
+        <div class="summary-cards">
+            <div class="card">
+                <div class="card-title">Total Tests</div>
+                <div class="card-value">11</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Passed</div>
+                <div class="card-value" style="color: var(--pass-text);">3</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Failed</div>
+                <div class="card-value" style="color: var(--fail-text);">8</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Success Rate</div>
+                <div class="card-value" style="color: var(--primary);">27.3%</div>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Page / Module</th>
+                    <th>Test Name</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Details / Error Log</th>
+                </tr>
+            </thead>
+            <tbody>
+
+                <tr>
+                    <td><strong>Database Core</strong></td>
+                    <td>Database & Schema Initialization</td>
+                    <td><span class="badge badge-pass">PASS</span></td>
+                    <td>1.20 ms</td>
+                    <td>Database initialized cleanly at /var/folders/lt/xtz0n3hx7djgjblpdqfv18jc0000gn/T/tmp38_r7nh1/test_app.db</td>
+                </tr>
+
+                <tr>
+                    <td><strong>Navigation & Sidebar</strong></td>
+                    <td>Page Switching & Stacked Widget</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>506.53 ms</td>
+                    <td><div class="error-trace">AttributeError: 'MainWindow' object has no attribute 'stacked_widget'
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 143, in _test
+    self.assertIsNotNone(window.stacked_widget)
+                         ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'stacked_widget'
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Departments Page</strong></td>
+                    <td>Department CRUD & Search Filter</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>105.47 ms</td>
+                    <td><div class="error-trace">TypeError: DepartmentsPage._filter_table() missing 1 required positional argument: 'text'
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 188, in _test
+    page._filter_table()
+TypeError: DepartmentsPage._filter_table() missing 1 required positional argument: 'text'
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Cameras Page</strong></td>
+                    <td>Camera CRUD & Search Filter</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>16.51 ms</td>
+                    <td><div class="error-trace">TypeError: CamerasPage._filter_table() missing 1 required positional argument: 'text'
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 256, in _test
+    page._filter_table()
+TypeError: CamerasPage._filter_table() missing 1 required positional argument: 'text'
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Employees Page</strong></td>
+                    <td>Employee CRUD & Search/Dept Filters</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>19.85 ms</td>
+                    <td><div class="error-trace">AssertionError: 1 != 0
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 330, in _test
+    self.assertEqual(page._table.rowCount(), 0)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/case.py", line 885, in assertEqual
+    assertion_func(first, second, msg=msg)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/case.py", line 878, in _baseAssertEqual
+    raise self.failureException(msg)
+AssertionError: 1 != 0
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Attendance Page</strong></td>
+                    <td>Attendance Filters, Date Ranges & KPIs</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>26.62 ms</td>
+                    <td><div class="error-trace">AttributeError: 'AttendancePage' object has no attribute '_apply_filter'
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 377, in _test
+    page._apply_filter()
+    ^^^^^^^^^^^^^^^^^^
+AttributeError: 'AttendancePage' object has no attribute '_apply_filter'. Did you mean: '_apply_filters'?
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Alarms Page</strong></td>
+                    <td>Unknown Face Alerts & Clear Action</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>0.34 ms</td>
+                    <td><div class="error-trace">OperationalError: table sync_events has no column named tenant_id
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 397, in _test
+    conn.execute(
+sqlite3.OperationalError: table sync_events has no column named tenant_id
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Dashboard Page</strong></td>
+                    <td>Dashboard Stats & Activity Feed</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>19.72 ms</td>
+                    <td><div class="error-trace">AttributeError: 'DashboardPage' object has no attribute 'search_input'
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 452, in _test
+    page.search_input.setText("Filter query")
+    ^^^^^^^^^^^^^^^^^
+AttributeError: 'DashboardPage' object has no attribute 'search_input'
+</div></td>
+                </tr>
+
+                <tr>
+                    <td><strong>Live Detection Page</strong></td>
+                    <td>Camera Feed View & Layout Grid</td>
+                    <td><span class="badge badge-pass">PASS</span></td>
+                    <td>4.32 ms</td>
+                    <td>Live Detection camera layout and feed container verified</td>
+                </tr>
+
+                <tr>
+                    <td><strong>Reports & Analytics</strong></td>
+                    <td>Charts & Analytical Breakdown</td>
+                    <td><span class="badge badge-pass">PASS</span></td>
+                    <td>20.01 ms</td>
+                    <td>Reports and analytics stats calculation and charts verified</td>
+                </tr>
+
+                <tr>
+                    <td><strong>Settings Page</strong></td>
+                    <td>Performance Profiles & Config Save</td>
+                    <td><span class="badge badge-fail">FAIL</span></td>
+                    <td>5.39 ms</td>
+                    <td><div class="error-trace">TypeError: SettingsPage._update_profile_description() takes 1 positional argument but 2 were given
+Traceback (most recent call last):
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 108, in run_test_method
+    res = test_func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/prabhattambe/Documents/ai-face-detection/test_ui_app.py", line 513, in _test
+    page._update_profile_description(idx)
+TypeError: SettingsPage._update_profile_description() takes 1 positional argument but 2 were given
+</div></td>
+                </tr>
+
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

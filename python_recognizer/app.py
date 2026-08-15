@@ -20,6 +20,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
 os.environ.setdefault("ONNXRUNTIME_ENGINE_THREAD_POOL_SIZE", "2")
 import threading
 import time
+from collections import deque
 from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlsplit, urlunsplit
@@ -76,6 +77,10 @@ except ModuleNotFoundError:
         scope_key,
         unscope_key,
     )
+try:
+    from python_recognizer.inference_scheduler import InferenceScheduler
+except ModuleNotFoundError:
+    from inference_scheduler import InferenceScheduler  # type: ignore
 
 
 logger = logging.getLogger("python_recognizer")
@@ -268,10 +273,15 @@ class FaceEngine:
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
         self._model_lock = threading.Lock()
+        self._large_model_lock = threading.Lock()
+        self._large_model: FaceAnalysis | None = None
+        self._last_large_inference_at = 0.0
+        self._large_inference_lock = threading.Lock()
         self._snapshot_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._last_snapshot_at = 0.0
         self._model = self._load_model()
+        self._inference_scheduler = InferenceScheduler(self.recognize, max_queue=2)
         threading.Thread(target=self._cleanup_snapshots, daemon=True).start()
         if self.backup_enabled:
             self._backup_thread = threading.Thread(target=self._backup_loop, daemon=True)
@@ -314,6 +324,18 @@ class FaceEngine:
                 "last_known_at": 0.0,
             }
         )
+        self._metrics_lock = threading.Lock()
+        self._metrics = {
+            "detectionFrames": 0,
+            "recognitionFrames": 0,
+            "droppedFrames": 0,
+            "detectionLatencyMs": deque(maxlen=200),
+            "recognitionLatencyMs": deque(maxlen=200),
+            "queueDepth": 0,
+        }
+        self._embedding_cache: dict[str, list[tuple[str, np.ndarray, str | None, list[str], bool]]] | None = None
+        self._face_match_cache: dict[str, dict[str, Any]] = {}
+        self._face_match_cache_lock = threading.Lock()
         if self.sync_enabled and self.sync_endpoint_url:
             self._sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
             self._sync_thread.start()
@@ -357,6 +379,23 @@ class FaceEngine:
         )
         model.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.detection_threshold)
         return model
+
+    def _load_large_model(self) -> FaceAnalysis:
+        """Load the high-accuracy model lazily for difficult face crops only."""
+        if self._large_model is not None:
+            return self._large_model
+        with self._large_model_lock:
+            if self._large_model is None:
+                providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
+                model = FaceAnalysis(
+                    name=os.getenv("INSIGHTFACE_LARGE_MODEL", "buffalo_l"),
+                    root=self.model_dir,
+                    providers=providers,
+                    allowed_modules=["detection", "recognition"],
+                )
+                model.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.40)
+                self._large_model = model
+        return self._large_model
 
     def health(self) -> dict[str, Any]:
         return {
@@ -405,6 +444,19 @@ class FaceEngine:
                     "lastDetection": frame_state.get("lastDetection"),
                 }
             )
+        with self._metrics_lock:
+            metrics = {
+                "detectionFrames": self._metrics["detectionFrames"],
+                "recognitionFrames": self._metrics["recognitionFrames"],
+                "droppedFrames": self._metrics["droppedFrames"],
+                "queueDepth": self._metrics["queueDepth"],
+                "detectionLatencyMs": round(float(np.mean(self._metrics["detectionLatencyMs"])) if self._metrics["detectionLatencyMs"] else 0.0, 2),
+                "recognitionLatencyMs": round(float(np.mean(self._metrics["recognitionLatencyMs"])) if self._metrics["recognitionLatencyMs"] else 0.0, 2),
+                "activeCameras": len(self._camera_workers),
+                "schedulerProcessed": self._inference_scheduler.processed,
+                "schedulerDropped": self._inference_scheduler.dropped,
+                "schedulerQueueDepth": self._inference_scheduler.jobs.qsize(),
+            }
         return {
             "state": self._state,
             "startedAt": self._started_at,
@@ -443,6 +495,7 @@ class FaceEngine:
             "attendanceCount": 0,
             "cameras": cameras,
             "update": {"enabled": False},
+            "performance": metrics,
         }
 
     def alarm_sound(self) -> Path | None:
@@ -469,6 +522,9 @@ class FaceEngine:
             "DETECTION_IMAGE_MAX_DIM",
             parse_int_env_setting(self.store, "DETECTION_IMAGE_MAX_DIM", 720),
         )
+        active_camera_count = max(1, len(self._camera_meta_cache))
+        if active_camera_count >= 5:
+            max_dim = min(max_dim, 640)
         h, w = image.shape[:2]
         scale = 1.0
         if max(h, w) > max_dim:
@@ -482,6 +538,7 @@ class FaceEngine:
         else:
             model_image = image
 
+        started_at = time.perf_counter()
         with self._model_lock:
             faces = self._model.get(model_image)
 
@@ -489,7 +546,12 @@ class FaceEngine:
             # pass. Only frames with no detected face get a 1.5x pass, which
             # gives small hallway faces more pixels without doubling CPU use
             # for every frame on low-end machines.
-            if not faces:
+            # The enlarged fallback is valuable with one or two cameras, but
+            # running it across 6-7 streams would create unnecessary CPU
+            # spikes. At that scale the regular 640px pass is the efficient
+            # baseline; temporal smoothing handles intermittent misses.
+            active_camera_count = max(1, len(self._camera_meta_cache))
+            if not faces and active_camera_count <= 2:
                 model_h, model_w = model_image.shape[:2]
                 fallback_max_dim = min(960, max_dim * 2)
                 fallback_scale = min(1.5, fallback_max_dim / max(model_h, model_w))
@@ -525,7 +587,13 @@ class FaceEngine:
             bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
             if len(bbox) >= 4 and min(bbox[2] - bbox[0], bbox[3] - bbox[1]) >= min_face_size:
                 quality_faces.append(face)
-        detected = [self._serialize_face(face, camera_department_id) for face in quality_faces]
+        detected = [self._serialize_face(face, camera_department_id, camera_id) for face in quality_faces]
+        with self._metrics_lock:
+            self._metrics["detectionFrames"] += 1
+            self._metrics["recognitionFrames"] += len(detected)
+            self._metrics["detectionLatencyMs"].append((time.perf_counter() - started_at) * 1000.0)
+        if os.getenv("HYBRID_RECOGNITION_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
+            detected = self._refine_uncertain_faces(image, detected, camera_department_id)
         detected = self._stabilize_camera_faces(detected, camera_role, camera_id)
         self._last_faces = detected
         self._detection_count += 1
@@ -728,7 +796,11 @@ class FaceEngine:
         return self.store.list_employees(tenant_id or self.default_tenant_id)
 
     def upsert_employee(self, payload: dict[str, Any], tenant_id: str | None = None) -> dict[str, Any]:
-        return self.store.upsert_employee(payload, tenant_id or self.default_tenant_id)
+        result = self.store.upsert_employee(payload, tenant_id or self.default_tenant_id)
+        self._embedding_cache = None
+        with self._face_match_cache_lock:
+            self._face_match_cache.clear()
+        return result
 
     def delete_employee(self, employee_id: str, tenant_id: str | None = None) -> bool:
         tenant = tenant_id or self.default_tenant_id
@@ -774,6 +846,9 @@ class FaceEngine:
                 continue
             self.store.register_face(str(employee["name"]), embedding, tenant, employee_id)
             added += 1
+        self._embedding_cache = None
+        with self._face_match_cache_lock:
+            self._face_match_cache.clear()
         if added == 0:
             raise HTTPException(status_code=400, detail="No usable face found in uploaded photos")
         self._registered_face_count = len(self.store.list_faces(self.default_tenant_id))
@@ -814,6 +889,8 @@ class FaceEngine:
         return self._flush_sync_queue()
 
     def start(self, camera_id: str | None = None, camera_role: str | None = None) -> dict[str, Any]:
+        if not self._inference_scheduler.thread.is_alive():
+            self._inference_scheduler = InferenceScheduler(self.recognize, max_queue=2)
         cameras = self._resolve_cameras(camera_id, camera_role)
         self._restart_camera_workers(cameras)
         self._state = "running"
@@ -823,6 +900,7 @@ class FaceEngine:
 
     def stop(self) -> dict[str, Any]:
         self._stop_camera_workers()
+        self._inference_scheduler.close()
         self._state = "idle"
         self._stopped_at = iso_now()
         return {"ok": True}
@@ -958,6 +1036,8 @@ class FaceEngine:
             try:
                 frame_counter = 0
                 current_dept_id = camera_department_id
+                previous_motion_sample: np.ndarray | None = None
+                last_inference_at = 0.0
                 while not stop_event.is_set():
                     if stream.process.poll() is not None:
                         exit_reason = self._drain_ffmpeg_stderr(stream, camera_id)
@@ -991,7 +1071,16 @@ class FaceEngine:
 
                     # 2. Frame decimation: recognition runs at the configured
                     # detection rate instead of processing every preview frame.
-                    detection_rate = max(1, parse_int_env_setting(self.store, "FRAME_RATE", 1))
+                    configured_detection_rate = max(1, parse_int_env_setting(self.store, "FRAME_RATE", 1))
+                    # Keep total CPU inference roughly bounded as cameras are
+                    # added. Balanced remains 3 FPS for one camera, but scales
+                    # to about 1 FPS per camera for a 6-7 camera installation.
+                    active_camera_count = max(1, len(self._camera_meta_cache))
+                    detection_rate = min(
+                        configured_detection_rate,
+                        max(1, 6 // active_camera_count),
+                        2,
+                    )
                     process_every = max(1, round(frame_rate / detection_rate))
                     if frame_counter % process_every != 0:
                         self._set_camera_frame_state(
@@ -1016,8 +1105,31 @@ class FaceEngine:
                     if frame is None:
                         time.sleep(0.005)
                         continue
+                    # Cheap motion gate: avoid model inference on unchanged
+                    # frames while retaining periodic checks for stationary
+                    # faces and alarms. This costs far less than InsightFace.
+                    motion_sample = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (32, 18), interpolation=cv2.INTER_AREA)
+                    motion_score = 255.0 if previous_motion_sample is None else float(cv2.absdiff(motion_sample, previous_motion_sample).mean())
+                    previous_motion_sample = motion_sample
+                    now_monotonic = time.monotonic()
+                    motion_interval = max(1.0, 1.0 / float(detection_rate))
+                    if motion_score < float(os.getenv("MOTION_GATE_THRESHOLD", "2.0")) and now_monotonic - last_inference_at < motion_interval:
+                        with self._metrics_lock:
+                            self._metrics["droppedFrames"] += 1
+                        time.sleep(max(0.0, 1.0 / float(frame_rate)))
+                        continue
                     try:
-                        result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
+                        last_inference_at = now_monotonic
+                        priority = 0 if camera_role in {"check_in", "check_out"} else 10
+                        future = self._inference_scheduler.submit(
+                            frame,
+                            priority=priority,
+                            camera_role=camera_role,
+                            camera_id=camera_id,
+                            tenant_id=self.default_tenant_id,
+                            camera_department_id=current_dept_id,
+                        )
+                        result = future.result(timeout=10.0)
                         self._set_camera_frame_state(
                             camera_id,
                             last_faces=result.get("faces") or [],
@@ -1089,6 +1201,9 @@ class FaceEngine:
             "DETECTION_IMAGE_MAX_DIM",
             parse_int_env_setting(self.store, "DETECTION_IMAGE_MAX_DIM", 720),
         )
+        active_camera_count = max(1, len(self._camera_meta_cache))
+        if active_camera_count >= 5:
+            max_dim = min(max_dim, 640)
         args = [
             ffmpeg_path,
             "-hide_banner",
@@ -1304,13 +1419,22 @@ class FaceEngine:
             return None
         return normalize_embedding(vector)
 
-    def _serialize_face(self, face: Any, camera_department_id: str | None = None) -> dict[str, Any]:
+    def _serialize_face(self, face: Any, camera_department_id: str | None = None, camera_id: str | None = None) -> dict[str, Any]:
         embedding = self._embedding_for(face)
         assert embedding is not None
-        raw_match = self._match_embedding(embedding, camera_department_id)
-        match = raw_match
         bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
         x1, y1, x2, y2 = bbox[:4]
+        cache_key = f"{camera_id or 'general'}:{round(x1 / 24)}:{round(y1 / 24)}:{round((x2-x1) / 16)}:{round((y2-y1) / 16)}"
+        now = time.monotonic()
+        with self._face_match_cache_lock:
+            cached = self._face_match_cache.get(cache_key)
+        if cached and now - float(cached.get("at", 0.0)) < float(os.getenv("RECOGNITION_CACHE_SECONDS", "8")):
+            raw_match = cached.get("match")
+        else:
+            raw_match = self._match_embedding(embedding, camera_department_id)
+            with self._face_match_cache_lock:
+                self._face_match_cache[cache_key] = {"at": now, "match": raw_match}
+        match = raw_match
         confidence = float(getattr(face, "det_score", 0.0))
         return {
             "confidence": confidence,
@@ -1323,6 +1447,72 @@ class FaceEngine:
             "match": match,
             "rawMatch": raw_match,
         }
+
+    def _refine_uncertain_faces(
+        self,
+        image: np.ndarray,
+        faces: list[dict[str, Any]],
+        camera_department_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Use buffalo_l only for small or uncertain faces.
+
+        The normal buffalo_s pass remains the hot path. The large model sees
+        only padded face crops, which keeps multi-camera CPU work bounded.
+        """
+        candidates = []
+        for index, face in enumerate(faces):
+            box = face.get("box") or {}
+            width = float(box.get("width") or 0.0)
+            height = float(box.get("height") or 0.0)
+            match = face.get("match") or {}
+            match_score = float(match.get("confidence") or 0.0) if match else 0.0
+            if min(width, height) < 48 or not match or match_score < self.match_threshold + 0.10:
+                candidates.append((index, face))
+        if not candidates:
+            return faces
+        if len(self._camera_meta_cache) >= 3 and os.getenv("HYBRID_LARGE_MODEL_MULTI_CAMERA", "false").lower() not in {"1", "true", "yes", "on"}:
+            return faces
+        candidates = candidates[:1]
+        now = time.monotonic()
+        min_interval = max(1.0, float(os.getenv("HYBRID_LARGE_MIN_INTERVAL_SECONDS", "5")))
+        with self._large_inference_lock:
+            if now - self._last_large_inference_at < min_interval:
+                return faces
+            self._last_large_inference_at = now
+
+        try:
+            model = self._load_large_model()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Large face model unavailable; using lightweight result: %s", exc)
+            return faces
+
+        height, width = image.shape[:2]
+        refined = list(faces)
+        with self._large_model_lock:
+            for index, face in candidates:
+                box = face.get("box") or {}
+                x = max(0, int(float(box.get("x") or 0.0)))
+                y = max(0, int(float(box.get("y") or 0.0)))
+                w = max(1, int(float(box.get("width") or 0.0)))
+                h = max(1, int(float(box.get("height") or 0.0)))
+                pad_x, pad_y = max(8, int(w * 0.35)), max(8, int(h * 0.35))
+                x1, y1 = max(0, x - pad_x), max(0, y - pad_y)
+                x2, y2 = min(width, x + w + pad_x), min(height, y + h + pad_y)
+                crop = image[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
+                crop_faces = self._large_model.get(crop)
+                if not crop_faces:
+                    continue
+                best = max(crop_faces, key=lambda item: float(getattr(item, "det_score", 0.0)))
+                embedding = self._embedding_for(best)
+                if embedding is None:
+                    continue
+                large_match = self._match_embedding(embedding, camera_department_id)
+                large_score = float(getattr(best, "det_score", 0.0))
+                if large_match is not None:
+                    refined[index] = {**face, "confidence": max(float(face.get("confidence") or 0.0), large_score), "match": large_match, "rawMatch": large_match}
+        return refined
 
     def _is_alertworthy_face(self, face: dict[str, Any], shape: tuple[int, ...]) -> bool:
         if len(shape) < 2:
@@ -1362,8 +1552,13 @@ class FaceEngine:
                         camera_dept_tokens.add(str(dept_rec["name"]).strip())
 
         groups: dict[str, list[tuple[np.ndarray, str | None, list[str], bool]]] = {}
-        for label, sample_embedding, _updated_at, _sample_count, employee_id, department_tokens, employee_active in self.store.all_embeddings():
-            groups.setdefault(label, []).append((sample_embedding, employee_id, department_tokens, employee_active))
+        if self._embedding_cache is None:
+            cache: dict[str, list[tuple[str, np.ndarray, str | None, list[str], bool]]] = defaultdict(list)
+            for label, sample_embedding, _updated_at, _sample_count, employee_id, department_tokens, employee_active in self.store.all_embeddings():
+                cache[label].append((label, sample_embedding, employee_id, department_tokens, employee_active))
+            self._embedding_cache = dict(cache)
+        for label, samples in self._embedding_cache.items():
+            groups[label] = [(sample[1], sample[2], sample[3], sample[4]) for sample in samples]
 
         for label, samples in groups.items():
             scores = [cosine_similarity(embedding, sample[0]) for sample in samples]

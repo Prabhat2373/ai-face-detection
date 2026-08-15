@@ -307,7 +307,9 @@
     if (!isLivePage || !stream || !canvas || !ctx) {
       return;
     }
-    const faces = latestStatus?.lastFaces || [];
+    // Live preview intentionally stays clean; recognition data remains
+    // available to the status/alarms views without drawing overlays here.
+    const faces = [];
     const { width, height } = resizeCanvas();
     ctx.clearRect(0, 0, width, height);
 
@@ -506,7 +508,7 @@
       overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       overlayCtx.clearRect(0, 0, rect.width, rect.height);
 
-      const faces = cameraStatus?.lastFaces || [];
+      const faces = [];
       if (!faces.length || !tile.naturalWidth || !tile.naturalHeight) {
         return;
       }

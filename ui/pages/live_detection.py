@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+from urllib.parse import quote, urlsplit, urlunsplit
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -11,7 +12,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QUrl, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
-from PySide6.QtMultimedia import QSoundEffect
+from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 
 from ..widgets import StatCard, SectionHeader, Pill, EmptyState
 from ..backend_client import BackendClient
@@ -20,7 +22,7 @@ from ..qt_workers import run_in_background
 
 
 class CameraFeedWidget(QFrame):
-    """A widget showing a single camera feed with overlay info."""
+    """A lightweight camera preview; recognition overlays stay off the feed."""
 
     def __init__(self, camera: dict, frame_bytes: bytes | None = None, parent=None):
         super().__init__(parent)
@@ -28,6 +30,19 @@ class CameraFeedWidget(QFrame):
         self._single_camera_mode = False
         self._last_pixmap = QPixmap()
         self._last_faces: list[dict] = []
+        self._media_player = QMediaPlayer(self)
+        self._video_widget = QVideoWidget(self)
+        self._media_player.setVideoOutput(self._video_widget)
+        self._fallback_label = QLabel("Waiting for preview…")
+        self._fallback_label.setAlignment(Qt.AlignCenter)
+        self._fallback_label.setStyleSheet("color: #6b7d9a; background: #050b14; border-radius: 8px;")
+        self._fallback_pixmap = QPixmap()
+        self._media_player.errorOccurred.connect(self._on_media_error)
+        self._media_player.mediaStatusChanged.connect(self._on_media_status)
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.timeout.connect(self._start_native_rtsp)
+        self._reconnect_attempt = 0
         self.setStyleSheet("""
             CameraFeedWidget {
                 background: #050b14;
@@ -69,6 +84,14 @@ class CameraFeedWidget(QFrame):
             border-radius: 8px;
         """)
         layout.addWidget(self.feed_label, 1)
+        self._video_widget.setMinimumHeight(220)
+        self._video_widget.setStyleSheet("background: #050b14; border-radius: 8px;")
+        layout.replaceWidget(self.feed_label, self._video_widget)
+        self.feed_label.deleteLater()
+        layout.addWidget(self._fallback_label, 1)
+        self._fallback_label.hide()
+        self._native_preview_failed = False
+        self._preview_disabled = True
 
         # Stream metadata footer
         footer = QHBoxLayout()
@@ -83,10 +106,107 @@ class CameraFeedWidget(QFrame):
         layout.addLayout(footer)
 
         self.set_frame(frame_bytes)
+        # Direct RTSP preview is intentionally disabled. The settings toggle
+        # is handled by the page-level low-power preview path later.
+        self._fallback_label.setText("Preview disabled · enable it in Settings")
+
+    def _start_native_rtsp(self):
+        # Live video is intentionally disabled until a low-power transport is
+        # selected. Detection, camera health, and alarms continue separately.
+        self._native_preview_failed = False
+        self._video_widget.hide()
+        self._fallback_label.show()
+        self._fallback_label.setText("Preview disabled · detection remains active")
+        return
+        rtsp_url = str(self.camera.get("rtsp_url") or "").strip()
+        if not rtsp_url:
+            return
+        # The backend normally injects credentials before opening RTSP. Native
+        # Qt playback bypasses that path, so add the encrypted DB credentials
+        # to the URL for the player as well.
+        username = str(self.camera.get("rtsp_username") or "").strip()
+        password = str(self.camera.get("rtsp_password") or "").strip()
+        try:
+            parsed = urlsplit(rtsp_url)
+            if parsed.scheme.lower() == "rtsp" and parsed.hostname and username:
+                host = parsed.hostname
+                if parsed.port:
+                    host = f"{host}:{parsed.port}"
+                netloc = f"{quote(username, safe='')}:{quote(password, safe='')}@{host}"
+                rtsp_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+        except ValueError:
+            pass
+        self._media_player.setSource(QUrl(rtsp_url))
+        self._media_player.play()
+
+    def _schedule_reconnect(self):
+        if self._reconnect_timer.isActive():
+            return
+        delay = min(10_000, 1_000 * (2 ** min(self._reconnect_attempt, 3)))
+        self._reconnect_attempt += 1
+        self._reconnect_timer.start(delay)
+
+    def _on_media_error(self, _error):
+        self._native_preview_failed = True
+        self._video_widget.hide()
+        self._fallback_label.show()
+        self.status_pill.set_text("Preview unavailable")
+        self.status_pill.set_state("warning")
+        self._media_player.stop()
+        self._schedule_reconnect()
+
+    def _on_media_status(self, status):
+        # Qt can report a stalled/invalid stream without emitting errorOccurred.
+        if status in (QMediaPlayer.MediaStatus.StalledMedia, QMediaPlayer.MediaStatus.InvalidMedia, QMediaPlayer.MediaStatus.EndOfMedia):
+            self._schedule_reconnect()
+        elif status == QMediaPlayer.MediaStatus.BufferedMedia:
+            self._reconnect_attempt = 0
+            self.status_pill.set_text("Live")
+            self.status_pill.set_state("running")
+
+    def start_mjpeg_stream(self, base_url: str):
+        # Kept as a compatibility no-op. Preview now uses native RTSP.
+        return
+
+    def set_preview_enabled(self, enabled: bool):
+        self._preview_disabled = not enabled
+        self._native_preview_failed = bool(enabled)
+        if enabled:
+            self._fallback_label.setText("Connecting preview…")
+            self._fallback_label.show()
+        else:
+            self._fallback_label.setText("Preview disabled · enable it in Settings")
+            self._fallback_label.show()
+
+    def _read_stream_data(self):
+        if self._stream_reply is None:
+            return
+        self._stream_buffer.extend(bytes(self._stream_reply.readAll()))
+        while True:
+            start = self._stream_buffer.find(b"\xff\xd8")
+            end = self._stream_buffer.find(b"\xff\xd9", start + 2)
+            if start < 0 or end < 0:
+                if len(self._stream_buffer) > 8 * 1024 * 1024:
+                    self._stream_buffer.clear()
+                return
+            frame = bytes(self._stream_buffer[start:end + 2])
+            del self._stream_buffer[:end + 2]
+            self.set_frame(frame)
+
+    def _stream_finished(self):
+        self._stream_reply = None
+        self._stream_buffer.clear()
+
+    def stop_mjpeg_stream(self):
+        self._reconnect_timer.stop()
+        self._media_player.stop()
+        self._media_player.setSource(QUrl())
 
     def update_faces(self, faces: list[dict]):
-        self._last_faces = faces
-        self._paint_frame()
+        # Keep recognition data in the status/alarms views, but never repaint
+        # detection boxes over the preview. This also avoids an expensive
+        # QPainter pass every time backend status is refreshed.
+        self._last_faces = []
 
     def set_single_camera_mode(self, enabled: bool):
         self._single_camera_mode = enabled
@@ -95,35 +215,39 @@ class CameraFeedWidget(QFrame):
     def _update_feed_height(self):
         if not self._single_camera_mode or self._last_pixmap.isNull():
             return
-        width = max(320, self.feed_label.width())
+        width = max(320, self._video_widget.width())
         aspect_height = int(width * self._last_pixmap.height() / max(1, self._last_pixmap.width()))
-        self.feed_label.setMinimumHeight(max(220, aspect_height))
+        self._video_widget.setMinimumHeight(max(220, aspect_height))
 
     def set_status(self, text: str, state: str = "idle", detail: str = ""):
         self.status_pill.set_text(text)
         self.status_pill.set_state(state)
         self.status_pill.setToolTip(detail)
         if self._last_pixmap.isNull():
-            self.feed_label.setText(detail or text)
-            self.feed_label.setPixmap(QPixmap())
+            self._video_widget.setToolTip(detail or text)
 
     def set_frame_info(self, text: str):
         self.frame_info.setText(text)
 
     def set_frame(self, frame_bytes: bytes | None, faces: list[dict] | None = None):
-        if faces is not None:
-            self._last_faces = faces
+        self._last_faces = []
         if not frame_bytes:
             return
         pixmap = QPixmap()
         if not pixmap.loadFromData(frame_bytes):
             return
+        if self._native_preview_failed:
+            self._fallback_pixmap = pixmap
+            self._render_fallback_preview()
+            self._fallback_label.setText("")
         self._last_pixmap = pixmap
         self._update_feed_height()
         self._paint_frame()
-        self.feed_label.setText("")
+        self._render_fallback_preview()
+        self._video_widget.setToolTip("")
 
     def closeEvent(self, event):
+        self.stop_mjpeg_stream()
         super().closeEvent(event)
 
     def resizeEvent(self, event):
@@ -132,8 +256,20 @@ class CameraFeedWidget(QFrame):
         self._paint_frame()
 
     def _paint_frame(self):
-        if self._last_pixmap.isNull():
+        # Native QMediaPlayer renders the video directly; no QPixmap painting.
+        return
+
+    def _render_fallback_preview(self):
+        if self._fallback_pixmap.isNull() or self._fallback_label.size().isEmpty():
             return
+        target = self._fallback_label.size()
+        scaled = self._fallback_pixmap.scaled(target, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        canvas = QPixmap(target)
+        canvas.fill(QColor("#050b14"))
+        painter = QPainter(canvas)
+        painter.drawPixmap((target.width() - scaled.width()) // 2, (target.height() - scaled.height()) // 2, scaled)
+        painter.end()
+        self._fallback_label.setPixmap(canvas)
 
         target_size = self.feed_label.size()
         # Preserve the camera's native aspect ratio so the complete frame is
@@ -152,40 +288,6 @@ class CameraFeedWidget(QFrame):
             scaled.width() / max(1, self._last_pixmap.width()),
             scaled.height() / max(1, self._last_pixmap.height()),
         )
-        painter.setFont(QFont("Inter", 11, QFont.Bold))
-        for face in self._last_faces:
-            box = face.get("box") or {}
-            if not box and face.get("bbox"):
-                raw_box = face.get("bbox")
-                if isinstance(raw_box, (list, tuple)) and len(raw_box) >= 4:
-                    box = {
-                        "x": raw_box[0],
-                        "y": raw_box[1],
-                        "width": raw_box[2] - raw_box[0],
-                        "height": raw_box[3] - raw_box[1],
-                    }
-            match = face.get("match") or {}
-            known = bool(match.get("label"))
-            color = QColor("#22c55e" if known else "#f87171")
-            painter.setPen(QPen(color, 3))
-            x = offset_x + float(box.get("x") or 0) * scale
-            y = offset_y + float(box.get("y") or 0) * scale
-            w = float(box.get("width") or 0) * scale
-            h = float(box.get("height") or 0) * scale
-            if w <= 1 or h <= 1:
-                continue
-            painter.drawRect(int(x), int(y), int(w), int(h))
-
-            confidence = match.get("confidence", face.get("confidence", 0))
-            label = match.get("label") or "Unknown"
-            text = f"{label} · {round(float(confidence or 0) * 100)}%"
-            metrics = painter.fontMetrics()
-            text_width = metrics.horizontalAdvance(text) + 14
-            text_y = max(4, int(y) - 24)
-            painter.fillRect(int(x), text_y, text_width, 22, QColor("#166534" if known else "#7f1d1d"))
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(int(x) + 7, text_y + 16, text)
-
         painter.end()
         self.feed_label.setPixmap(canvas)
 
@@ -197,6 +299,7 @@ class FullscreenCameraGrid(QDialog):
         super().__init__(parent)
         self.backend = backend
         self.cameras = cameras
+        self.preview_enabled = Database.get().get_setting("CAMERA_PREVIEW_ENABLED", "false").lower() == "true"
         self.feeds: dict[str, CameraFeedWidget] = {}
         self.requests: set[str] = set()
         self.status_request_active = False
@@ -216,17 +319,21 @@ class FullscreenCameraGrid(QDialog):
             feed.setMinimumSize(360, 260)
             camera_id = str(camera.get("id"))
             self.feeds[camera_id] = feed
+            feed.set_preview_enabled(self.preview_enabled)
+            feed.start_mjpeg_stream(self.backend.base_url)
             row, column = divmod(index, columns)
             layout.addWidget(feed, row, column)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_frames)
-        self.timer.start(100)
+        self.timer.start(max(300, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "500"))))
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
-        self.status_timer.start(500)
+        self.status_timer.start(1000)
         self.refresh_frames()
 
     def refresh_frames(self):
+        if not self.preview_enabled:
+            return
         for camera_id, feed in self.feeds.items():
             if camera_id in self.requests:
                 continue
@@ -259,6 +366,8 @@ class FullscreenCameraGrid(QDialog):
     def closeEvent(self, event):
         self.timer.stop()
         self.status_timer.stop()
+        for feed in self.feeds.values():
+            feed.stop_mjpeg_stream()
         super().closeEvent(event)
 
 
@@ -278,6 +387,7 @@ class LiveDetectionPage(QWidget):
         self._start_request_active = False
         self._last_start_attempt_ms = 0
         self._frame_requests_active: set[str] = set()
+        self._preview_enabled = self.db.get_setting("CAMERA_PREVIEW_ENABLED", "false").lower() == "true"
         self._alarm_cooldown_ms = max(500, int(os.getenv("FACEAGENT_UI_ALARM_COOLDOWN_MS", "5000")))
         self._alarm_sound = self._create_alarm_sound()
         self._build_ui()
@@ -290,7 +400,9 @@ class LiveDetectionPage(QWidget):
         self._refresh_timer.start(1000)
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._refresh_frames)
-        frame_interval_ms = max(50, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "100")))
+        # Preview is deliberately low-rate and independent of recognition.
+        # Backend detection continues on its own schedule.
+        frame_interval_ms = max(300, int(os.getenv("FACEAGENT_UI_FRAME_INTERVAL_MS", "500")))
         self._frame_timer.start(frame_interval_ms)
         self.refresh()
         QTimer.singleShot(1500, self._ensure_detection_started)
@@ -436,8 +548,10 @@ class LiveDetectionPage(QWidget):
             cols = max(1, min(3, len(enabled)))
             for idx, cam in enumerate(enabled):
                 feed = CameraFeedWidget(cam)
+                feed.set_preview_enabled(self._preview_enabled)
                 feed.set_single_camera_mode(len(enabled) == 1)
                 self._feed_widgets[str(cam.get("id"))] = feed
+                feed.start_mjpeg_stream(self.backend.base_url)
                 row, col = divmod(idx, cols)
                 self._camera_grid.addWidget(feed, row, col)
             self._refresh_frames()
@@ -599,17 +713,16 @@ class LiveDetectionPage(QWidget):
         return []
 
     def _refresh_frames(self):
-        if not self._feed_widgets:
-            return
+        # Native RTSP is the normal path. Poll only cameras whose native
+        # decoder failed, so unsupported HEVC streams still have a visible
+        # low-rate fallback without adding load to healthy cameras.
         for camera_id, feed in self._feed_widgets.items():
-            if camera_id in self._frame_requests_active:
+            if feed._preview_disabled or not feed._native_preview_failed or camera_id in self._frame_requests_active:
                 continue
             self._frame_requests_active.add(camera_id)
             run_in_background(
                 lambda camera_id=camera_id: self.backend.frame(camera_id=camera_id),
-                on_result=lambda frame, camera_id=camera_id, feed=feed: feed.set_frame(
-                    frame, self._camera_faces(camera_id)
-                ),
+                on_result=lambda frame, feed=feed: feed.set_frame(frame),
                 on_finished=lambda camera_id=camera_id: self._frame_requests_active.discard(camera_id),
             )
 
