@@ -165,9 +165,23 @@ class CameraFeedWidget(QFrame):
                         "height": raw_box[3] - raw_box[1],
                     }
             match = face.get("match") or {}
-            known = bool(match.get("label"))
-            color = QColor("#22c55e" if known else "#f87171")
-            painter.setPen(QPen(color, 3))
+            track_status = str(face.get("trackStatus") or ("known" if match and match.get("label") else ("unknown" if face.get("isUnknown") else "tracking")))
+            is_unknown = face.get("isUnknown", False) or track_status == "unknown"
+
+            if track_status == "known":
+                box_color = QColor("#22c55e")      # Green
+                bg_color = QColor("#166534")
+                label = match.get("label") or "Known"
+            elif track_status == "tracking" or not face.get("isProcessable", True):
+                box_color = QColor("#f59e0b")      # Amber / Yellow
+                bg_color = QColor("#92400e")
+                label = "Tracking..."
+            else:
+                box_color = QColor("#ef4444")      # Red
+                bg_color = QColor("#7f1d1d")
+                label = "Unknown"
+
+            painter.setPen(QPen(box_color, 3))
             x = offset_x + float(box.get("x") or 0) * scale
             y = offset_y + float(box.get("y") or 0) * scale
             w = float(box.get("width") or 0) * scale
@@ -177,12 +191,11 @@ class CameraFeedWidget(QFrame):
             painter.drawRect(int(x), int(y), int(w), int(h))
 
             confidence = match.get("confidence", face.get("confidence", 0))
-            label = match.get("label") or "Unknown"
             text = f"{label} · {round(float(confidence or 0) * 100)}%"
             metrics = painter.fontMetrics()
             text_width = metrics.horizontalAdvance(text) + 14
             text_y = max(4, int(y) - 24)
-            painter.fillRect(int(x), text_y, text_width, 22, QColor("#166534" if known else "#7f1d1d"))
+            painter.fillRect(int(x), text_y, text_width, 22, bg_color)
             painter.setPen(QColor("#ffffff"))
             painter.drawText(int(x) + 7, text_y + 16, text)
 
@@ -623,7 +636,7 @@ class LiveDetectionPage(QWidget):
         for camera in camera_statuses:
             camera_id = str(camera.get("id") or "camera")
             faces = camera.get("lastFaces") or []
-            has_unknown = any(not (face.get("match") or {}).get("label") for face in faces)
+            has_unknown = any(face.get("isUnknown", False) or face.get("trackStatus") == "unknown" for face in faces)
             if not has_unknown:
                 continue
             previous = int(self._last_unknown_alarm_at.get(camera_id) or 0)

@@ -49,6 +49,28 @@ logs/
 *.db-wal
 *.db-journal
 
+# Local biometric data and runtime exports
+# These may contain faces, embeddings, attendance records, or other
+# machine-specific data and should remain local.
+/data/real_samples/
+/None/
+/snapshots/
+/attendance.csv
+/attendance-*.csv
+python_recognizer/snapshots/
+python_recognizer/known-faces*.json
+python_recognizer/identity_real_snapshots/
+**/identity_real_snapshots/
+
+# Local model/runtime data
+/models/
+/model_cache/
+/insightface_models/
+*.face
+*.embedding
+*.npy
+*.npz
+
 # License tokens / private keys (do not commit keys)
 # Keep the public key tracked; ignore private keys and generated tokens.
 licenses/*.key

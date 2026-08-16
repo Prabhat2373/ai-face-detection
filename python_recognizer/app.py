@@ -63,6 +63,7 @@ try:
         scope_key,
         unscope_key,
     )
+    from python_recognizer.telemetry import telemetry_collector
 except ModuleNotFoundError:
     from store import (  # type: ignore
         SQLiteStore,
@@ -76,6 +77,7 @@ except ModuleNotFoundError:
         scope_key,
         unscope_key,
     )
+    from telemetry import telemetry_collector  # type: ignore
 
 
 logger = logging.getLogger("python_recognizer")
@@ -214,7 +216,7 @@ class FaceEngine:
         )
         self.detection_threshold = parse_float_env(
             "PYTHON_DETECTION_THRESHOLD",
-            parse_float_env("DETECTION_THRESHOLD", 0.65),
+            parse_float_env("DETECTION_THRESHOLD", 0.35),
         )
         self.snapshot_cooldown_ms = parse_int_env("SNAPSHOT_COOLDOWN_MS", 10_000)
         # Settings saved by the desktop UI take precedence over environment
@@ -325,15 +327,12 @@ class FaceEngine:
         if self.store.get_setting("PERFORMANCE_PROFILE", None) is not None:
             return
         defaults = {
-            # The low-memory profile used to shrink 720p/1080p camera frames to
-            # 360px before detection. That makes a person in the background only
-            # a handful of pixels tall and guarantees that they are discarded.
             "PERFORMANCE_PROFILE": "balanced",
-            "INSIGHTFACE_MODEL": "buffalo_s",
+            "INSIGHTFACE_MODEL": "custom_student",
             "INSIGHTFACE_DET_SIZE": "640",
             "DETECTION_IMAGE_MAX_DIM": "720",
-            "STREAM_FRAME_RATE": "5",
-            "FRAME_RATE": "3",
+            "STREAM_FRAME_RATE": "15",
+            "FRAME_RATE": "5",
             "AUTO_START_DETECTION": "false",
         }
         for key, value in defaults.items():
@@ -349,8 +348,9 @@ class FaceEngine:
 
     def _load_model(self) -> FaceAnalysis:
         providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
+        model_pack_name = "buffalo_s" if self.model_name == "custom_student" else self.model_name
         model = FaceAnalysis(
-            name=self.model_name,
+            name=model_pack_name,
             root=self.model_dir,
             providers=providers,
             allowed_modules=["detection", "recognition"],
@@ -359,10 +359,19 @@ class FaceEngine:
         return model
 
     def health(self) -> dict[str, Any]:
+        custom_onnx_path = Path("weights/custom_student/student_std_512d_int8.onnx")
+        is_custom_active = (self.model_name == "custom_student") or (
+            self.model_name not in {"buffalo_l", "buffalo_s"} and custom_onnx_path.exists()
+        )
         return {
             "ok": True,
             "ready": True,
-            "model": self.model_name,
+            "configuredModel": self.model_name,
+            "model": "custom_student_int8" if is_custom_active else self.model_name,
+            "customStudentModelActive": is_custom_active,
+            "customStudentModelAvailable": custom_onnx_path.exists(),
+            "customStudentModelPath": str(custom_onnx_path) if custom_onnx_path.exists() else None,
+            "teacherFallbackModel": None,
             "faces": self._registered_face_count,
             "cameras": len(self.store.list_cameras(self.default_tenant_id)),
             "runningCameras": len(self._camera_workers),
@@ -2113,6 +2122,11 @@ async def clear_alarms() -> dict[str, Any]:
 @app.get("/sync/status")
 async def sync_status() -> dict[str, Any]:
     return engine.sync_status()
+
+
+@app.get("/telemetry")
+async def telemetry() -> dict[str, Any]:
+    return telemetry_collector.get_metrics()
 
 
 @app.get("/sync/pending")
