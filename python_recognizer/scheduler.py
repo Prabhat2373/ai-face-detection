@@ -224,7 +224,7 @@ class CentralInferenceScheduler:
                     match_rec, score, _ = self.engine_manager.match_against_gallery(
                         embedding=emb,
                         gallery=gallery,
-                        match_threshold=0.40,
+                        match_threshold=0.52,
                         telemetry_collector=self.telemetry,
                     )
                     

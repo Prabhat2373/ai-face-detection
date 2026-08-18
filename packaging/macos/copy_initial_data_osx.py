@@ -111,7 +111,7 @@ def find_resource_root(explicit: Optional[Path] = None) -> Path:
         try:
             if c and c.exists():
                 # Heuristic: accept if contains python_recognizer or ui or licenses
-                if (c / "python_recognizer").exists() or (c / "ui").exists() or (c / "licenses").exists() or (c / "insightface_models").exists():
+                if (c / "python_recognizer").exists() or (c / "ui").exists() or (c / "licenses").exists() or (c / "weights").exists():
                     return c
         except Exception:
             continue
@@ -256,15 +256,15 @@ def perform_copy(resource_root: Path, target: Path, force: bool = False, *, verb
     if snapshots_src.exists():
         copy_tree_if_missing(snapshots_src, target / "snapshots", force=force, verbose=verbose)
 
-    # Models (insightface_models)
-    models_src = resource_root / "insightface_models"
+    # Custom recognizer model
+    models_src = resource_root / "weights" / "custom_student"
     if models_src.exists():
-        ok = copy_tree_if_missing(models_src, target / "insightface_models", force=force, verbose=verbose)
+        ok = copy_tree_if_missing(models_src, target / "weights" / "custom_student", force=force, verbose=verbose)
         if not ok:
             rc = max(rc, 2)
     else:
         if verbose:
-            log("No insightface_models found in resources (skipping).", verbose=verbose)
+            log("No custom recognizer model found in resources (skipping).", verbose=verbose)
 
     # ffmpeg runtime (optional)
     ffmpeg_src = resource_root / "ffmpeg_runtime"
@@ -337,7 +337,7 @@ def main(argv=None) -> int:
             log("Dry-run mode: listing resources that would be copied:", verbose=verbose)
             candidates = [
                 resource_root / "python_recognizer" / "data" / "app.db",
-                resource_root / "insightface_models",
+                resource_root / "weights" / "custom_student",
                 resource_root / "ffmpeg_runtime",
                 resource_root / "licenses" / "public_key.pem",
                 resource_root / "license.key",

@@ -38,7 +38,10 @@ from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from insightface.app import FaceAnalysis
+try:
+    from python_recognizer.custom_pipeline import CustomONNXFacePipeline
+except ModuleNotFoundError:
+    from custom_pipeline import CustomONNXFacePipeline  # type: ignore
 
 try:
     cv2.setLogLevel(3)
@@ -212,8 +215,9 @@ class FaceEngine:
 
         self.match_threshold = parse_float_env(
             "PYTHON_MATCH_THRESHOLD",
-            parse_float_env("MATCH_THRESHOLD", 0.45),
+            parse_float_env("MATCH_THRESHOLD", 0.50),
         )
+        self.match_margin = parse_float_env("MATCH_MARGIN", 0.08)
         self.detection_threshold = parse_float_env(
             "PYTHON_DETECTION_THRESHOLD",
             parse_float_env("DETECTION_THRESHOLD", 0.35),
@@ -234,11 +238,8 @@ class FaceEngine:
             parse_int_env("INSIGHTFACE_DET_HEIGHT", configured_det_size),
         )
         self.model_name = os.getenv(
-            "INSIGHTFACE_MODEL",
-            self.store.get_setting("INSIGHTFACE_MODEL", "buffalo_s"),
-        )
-        self.model_dir = os.getenv("INSIGHTFACE_MODEL_DIR") or str(
-            Path.home() / ".cache" / "insightface"
+            "CUSTOM_RECOGNIZER_MODEL_NAME",
+            self.store.get_setting("INSIGHTFACE_MODEL", "custom_student"),
         )
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
@@ -316,6 +317,7 @@ class FaceEngine:
                 "last_known_at": 0.0,
             }
         )
+        self._active_tracks: dict[str, list[dict[str, Any]]] = {}
         if self.sync_enabled and self.sync_endpoint_url:
             self._sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
             self._sync_thread.start()
@@ -346,23 +348,15 @@ class FaceEngine:
             return db_val.lower() in {"1", "true", "yes", "on"}
         return fallback
 
-    def _load_model(self) -> FaceAnalysis:
-        providers = [provider.strip() for provider in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if provider.strip()]
-        model_pack_name = "buffalo_s" if self.model_name == "custom_student" else self.model_name
-        model = FaceAnalysis(
-            name=model_pack_name,
-            root=self.model_dir,
-            providers=providers,
-            allowed_modules=["detection", "recognition"],
-        )
-        model.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.detection_threshold)
-        return model
+    def _load_model(self) -> CustomONNXFacePipeline:
+        """Load only the bundled custom detector/recognizer pipeline."""
+        if self.model_name != "custom_student":
+            logger.warning("Ignoring unsupported model '%s'; custom_student is mandatory", self.model_name)
+        return CustomONNXFacePipeline()
 
     def health(self) -> dict[str, Any]:
-        custom_onnx_path = Path("weights/custom_student/student_std_512d_int8.onnx")
-        is_custom_active = (self.model_name == "custom_student") or (
-            self.model_name not in {"buffalo_l", "buffalo_s"} and custom_onnx_path.exists()
-        )
+        custom_onnx_path = self._model.model_path
+        is_custom_active = True
         return {
             "ok": True,
             "ready": True,
@@ -372,6 +366,9 @@ class FaceEngine:
             "customStudentModelAvailable": custom_onnx_path.exists(),
             "customStudentModelPath": str(custom_onnx_path) if custom_onnx_path.exists() else None,
             "teacherFallbackModel": None,
+            "detector": "buffalo_s",
+            "insightfaceRuntime": False,
+            "recognizerEmbeddingDimension": self._model.embedding_dim,
             "faces": self._registered_face_count,
             "cameras": len(self.store.list_cameras(self.default_tenant_id)),
             "runningCameras": len(self._camera_workers),
@@ -534,15 +531,15 @@ class FaceEngine:
             bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
             if len(bbox) >= 4 and min(bbox[2] - bbox[0], bbox[3] - bbox[1]) >= min_face_size:
                 quality_faces.append(face)
-        detected = [self._serialize_face(face, camera_department_id) for face in quality_faces]
+        detected = [self._serialize_face(face, camera_department_id, camera_id) for face in quality_faces]
         detected = self._stabilize_camera_faces(detected, camera_role, camera_id)
         self._last_faces = detected
         self._detection_count += 1
         snapshot = self._maybe_save_snapshot(image, detected)
         state = "faces detected" if detected else "no face detected"
         camera_key = camera_id or camera_role or "general"
-        known_faces = [face for face in detected if face["match"] and face["match"].get("label")]
-        unknown_faces = [face for face in detected if not face["match"] or not face["match"].get("label")]
+        known_faces = [face for face in detected if face.get("trackStatus") == "known" and face.get("match", {}).get("label")]
+        unknown_faces = [face for face in detected if face.get("trackStatus") == "unknown" and not (face.get("match") or {}).get("label")]
         unknown_faces = [face for face in unknown_faces if float(face.get("confidence") or 0.0) >= self.alarm_min_detection_confidence]
         unknown_faces = [face for face in unknown_faces if self._is_alertworthy_face(face, image.shape)]
         if unknown_faces:
@@ -1313,27 +1310,130 @@ class FaceEngine:
             return None
         return normalize_embedding(vector)
 
-    def _serialize_face(self, face: Any, camera_department_id: str | None = None) -> dict[str, Any]:
+    def _serialize_face(
+        self,
+        face: Any,
+        camera_department_id: str | None = None,
+        camera_id: str | None = None,
+    ) -> dict[str, Any]:
         embedding = self._embedding_for(face)
         assert embedding is not None
         raw_match = self._match_embedding(embedding, camera_department_id)
         match = raw_match
         bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
         x1, y1, x2, y2 = bbox[:4]
+        w = max(0.0, x2 - x1)
+        h = max(0.0, y2 - y1)
         confidence = float(getattr(face, "det_score", 0.0))
+        processable = True
+
+        # Track management for 3-State Display: "tracking" (amber), "known" (green), "unknown" (red)
+        track_key = f"{camera_id or 'cam'}"
+        cx, cy = x1 + w / 2.0, y1 + h / 2.0
+        now_time = time.time()
+
+        tracks = self._active_tracks.setdefault(track_key, [])
+        self._active_tracks[track_key] = [t for t in tracks if now_time - t["last_seen"] < 2.0]
+        tracks = self._active_tracks[track_key]
+
+        matched_track = None
+        best_dist = float("inf")
+        for t in tracks:
+            tcx, tcy = t["centroid"]
+            vx, vy = t.get("vx", 0.0), t.get("vy", 0.0)
+            dt = max(0.01, now_time - t["last_seen"])
+            # Predict position using velocity during motion
+            pred_cx = tcx + vx * dt
+            pred_cy = tcy + vy * dt
+            pred_dist = ((cx - pred_cx)**2 + (cy - pred_cy)**2)**0.5
+            direct_dist = ((cx - tcx)**2 + (cy - tcy)**2)**0.5
+            effective_dist = min(pred_dist, direct_dist)
+            
+            # Fast-motion tolerance: allow up to max(w, h) * 3.5 or 140px displacement between frames
+            max_allowed = max(max(w, h) * 3.5, 140.0)
+            if effective_dist < max_allowed and effective_dist < best_dist:
+                best_dist = effective_dist
+                matched_track = t
+
+        if matched_track is None:
+            matched_track = {
+                "centroid": (cx, cy),
+                "box": (x1, y1, w, h),
+                "vx": 0.0,
+                "vy": 0.0,
+                "frames": 1,
+                "first_seen": now_time,
+                "last_seen": now_time,
+                "confirmed_label": None,
+                "confirmed_score": 0.0,
+            }
+            tracks.append(matched_track)
+        else:
+            dt = max(0.01, now_time - matched_track["last_seen"])
+            old_cx, old_cy = matched_track["centroid"]
+            new_vx = (cx - old_cx) / dt
+            new_vy = (cy - old_cy) / dt
+            matched_track["vx"] = 0.6 * matched_track.get("vx", 0.0) + 0.4 * new_vx
+            matched_track["vy"] = 0.6 * matched_track.get("vy", 0.0) + 0.4 * new_vy
+            matched_track["centroid"] = (cx, cy)
+            matched_track["box"] = (x1, y1, w, h)
+            matched_track["frames"] += 1
+            matched_track["last_seen"] = now_time
+
+        # Quality check: detect if looking down at phone/floor
+        kps = getattr(face, "kps", None)
+        is_face_processable = True
+        if kps is not None and len(kps) >= 5:
+            try:
+                left_eye, right_eye, nose, left_mouth, right_mouth = kps[:5]
+                eye_y = (float(left_eye[1]) + float(right_eye[1])) / 2.0
+                mouth_y = (float(left_mouth[1]) + float(right_mouth[1])) / 2.0
+                nose_y = float(nose[1])
+                # If looking straight down at phone/floor, vertical distance between eyes and mouth collapses
+                if (mouth_y - eye_y) < h * 0.16 or (nose_y - eye_y) < h * 0.05:
+                    is_face_processable = False
+            except Exception:
+                pass
+
+        if match and match.get("label"):
+            matched_track["confirmed_label"] = match["label"]
+            matched_track["confirmed_score"] = float(match["confidence"])
+            track_status = "known"
+        elif matched_track["confirmed_label"]:
+            match = {
+                "label": matched_track["confirmed_label"],
+                "score": matched_track["confirmed_score"],
+                "confidence": matched_track["confirmed_score"],
+                "sampleCount": 1,
+            }
+            track_status = "known"
+        elif w < 32.0 or h < 32.0 or not is_face_processable or matched_track["frames"] < 3:
+            # Beyond reliable range (<32px, far doorway) or looking down: keep in Tracking... (amber)
+            track_status = "tracking"
+        else:
+            # Confirmed unknown inside clear recognition range (>=32px, frontal view, >=3 frames)
+            track_status = "unknown"
+
         return {
             "confidence": confidence,
             "box": {
                 "x": x1,
                 "y": y1,
-                "width": max(0.0, x2 - x1),
-                "height": max(0.0, y2 - y1),
+                "width": w,
+                "height": h,
             },
             "match": match,
             "rawMatch": raw_match,
+            "trackStatus": track_status,
+            "isUnknown": track_status == "unknown",
+            "isProcessable": is_face_processable,
         }
 
     def _is_alertworthy_face(self, face: dict[str, Any], shape: tuple[int, ...]) -> bool:
+        if not face.get("isUnknown") or face.get("trackStatus") != "unknown":
+            return False
+        if not face.get("isProcessable", True):
+            return False
         if len(shape) < 2:
             return True
         height, width = int(shape[0]), int(shape[1])
@@ -1342,10 +1442,9 @@ class FaceEngine:
         y = float(box.get("y") or 0.0)
         w = float(box.get("width") or 0.0)
         h = float(box.get("height") or 0.0)
-        # Keep alert eligibility aligned with recognition. A separate 35px
-        # gate caused small faces to appear in Live Detection but never create
-        # an unknown-person alert.
-        min_alert_face_size = max(16, parse_int_env_setting(self.store, "MIN_FACE_SIZE", 20))
+        
+        # Only trigger alarms for faces inside reliable detection range (>= 38px)
+        min_alert_face_size = max(38, parse_int_env_setting(self.store, "MIN_ALERT_FACE_SIZE", 38))
         if w < min_alert_face_size or h < min_alert_face_size:
             return False
         if x < 0 or y < 0:
@@ -1355,7 +1454,7 @@ class FaceEngine:
         return True
 
     def _match_embedding(self, embedding: np.ndarray, camera_department_id: str | None = None) -> dict[str, Any] | None:
-        best: dict[str, Any] | None = None
+        candidates: list[dict[str, Any]] = []
 
         # Build set of camera department tokens (IDs and names) if camera is restricted to a department
         camera_dept_tokens: set[str] = set()
@@ -1379,8 +1478,8 @@ class FaceEngine:
             if not scores:
                 continue
             scores.sort(reverse=True)
-            top_scores = scores[:3]
-            score = max(top_scores[0], sum(top_scores) / len(top_scores))
+            top_scores = scores[:2]
+            score = float(np.mean(top_scores)) if len(top_scores) >= 2 else float(top_scores[0])
             employee_id = next((sample[1] for sample in samples if sample[1]), None)
             emp_dept_tokens = {token for sample in samples for token in sample[2]}
             active = all(sample[3] for sample in samples)
@@ -1401,21 +1500,29 @@ class FaceEngine:
             if not authorized:
                 continue
 
-            if best is None or score > float(best["score"]):
-                employee_code = self.store.employee_code(employee_id, self.default_tenant_id)
-                best = {
-                    "label": label,
-                    "score": score,
-                    "confidence": score,
-                    "sampleCount": len(samples),
-                    "employeeId": employee_id,
-                    "employeeCode": employee_code,
-                    "departmentIds": sorted(emp_dept_tokens),
-                    "authorized": True,
-                }
+            employee_code = self.store.employee_code(employee_id, self.default_tenant_id)
+            candidates.append({
+                "label": label,
+                "score": score,
+                "confidence": score,
+                "sampleCount": len(samples),
+                "employeeId": employee_id,
+                "employeeCode": employee_code,
+                "departmentIds": sorted(emp_dept_tokens),
+                "authorized": True,
+            })
 
-        if best is None or float(best["score"]) < self.match_threshold:
+        candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+        if not candidates:
             return None
+        best = candidates[0]
+        runner_up_score = float(candidates[1]["score"]) if len(candidates) > 1 else -1.0
+        best_score = float(best["score"])
+        # Reject weak or ambiguous matches. This is deliberately conservative:
+        # an unknown face must not be assigned to the nearest employee.
+        if best_score < self.match_threshold or best_score - runner_up_score < self.match_margin:
+            return None
+        best["margin"] = round(best_score - runner_up_score, 4)
         return best
 
     def _maybe_save_snapshot(
@@ -1642,28 +1749,49 @@ class FaceEngine:
             best = max(known_faces, key=lambda face: float(face["match"]["confidence"]))
             camera_state["last_known_label"] = str(best["match"]["label"])
             camera_state["last_known_confidence"] = float(best["match"]["confidence"])
+            camera_state["last_known_box"] = best.get("box") or {}
             camera_state["last_known_at"] = now_ms
             return faces
 
         recent_label = camera_state.get("last_known_label")
+        recent_box = camera_state.get("last_known_box") or {}
         recent_seen_at = float(camera_state.get("last_known_at") or 0.0)
         recent_confidence = float(camera_state.get("last_known_confidence") or 0.0)
+
         if (
             recent_label
+            and recent_box
             and now_ms - recent_seen_at <= self.recognition_grace_ms
             and len(faces) == 1
         ):
             face = dict(faces[0])
-            current_match = face.get("match") or {}
-            if not current_match.get("label"):
-                face["match"] = {
-                    "label": recent_label,
-                    "score": recent_confidence,
-                    "confidence": recent_confidence,
-                    "sampleCount": current_match.get("sampleCount", 0),
-                    "stabilized": True,
-                }
-                return [face]
+            cur_box = face.get("box") or {}
+            
+            # Compute IoU between recent known box and current face box
+            x1, y1 = float(recent_box.get("x", 0)), float(recent_box.get("y", 0))
+            w1, h1 = float(recent_box.get("width", 0)), float(recent_box.get("height", 0))
+            x2, y2 = float(cur_box.get("x", 0)), float(cur_box.get("y", 0))
+            w2, h2 = float(cur_box.get("width", 0)), float(cur_box.get("height", 0))
+            
+            inter_x1, inter_y1 = max(x1, x2), max(y1, y2)
+            inter_x2, inter_y2 = min(x1 + w1, x2 + w2), min(y1 + h1, y2 + h2)
+            inter_area = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
+            union_area = (w1 * h1) + (w2 * h2) - inter_area
+            iou = inter_area / union_area if union_area > 0 else 0.0
+
+            # Only carry over identity if the bounding box corresponds to the same person (> 25% overlap)
+            if iou >= 0.25:
+                current_match = face.get("match") or {}
+                if not current_match.get("label"):
+                    face["match"] = {
+                        "label": recent_label,
+                        "score": recent_confidence,
+                        "confidence": recent_confidence,
+                        "sampleCount": current_match.get("sampleCount", 0),
+                        "stabilized": True,
+                    }
+                    camera_state["last_known_box"] = cur_box
+                    return [face]
 
         return faces
 

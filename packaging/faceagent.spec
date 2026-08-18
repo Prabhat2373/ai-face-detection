@@ -7,7 +7,7 @@ that should be available at runtime:
 
 - A clean database is created per installation; development app.db is never bundled.
 - licenses/public_key.pem
-- insightface_models/ (if present)
+- weights/custom_student/ (required custom recognizer)
 - ffmpeg_runtime/ (if present)
 - ui/ (resources used by the UI)
 
@@ -63,15 +63,13 @@ _add_data_if_exists(PROJECT_ROOT / "python_recognizer" / "mixkit-data-scaner-284
 # Licensing public key
 _add_data_if_exists(PROJECT_ROOT / "licenses" / "public_key.pem", "licenses")
 
-# InsightFace model directory (if vendored)
+# Bundle the custom recognizer; the runtime must never download a model.
+_add_data_if_exists(PROJECT_ROOT / "weights" / "custom_student", "weights/custom_student")
+_add_data_if_exists(PROJECT_ROOT / "weights" / "detectors", "weights/detectors")
 _add_data_if_exists(PROJECT_ROOT / "insightface_models", "insightface_models")
-
-# Also vendor the developer/CI cache when a model has been downloaded there.
-# InsightFace expects root/models/<model-name>, so preserve that layout.
-for _model_name in ("buffalo_s", "buffalo_l"):
-    _cached_model = Path.home() / ".cache" / "insightface" / "models" / _model_name
-    if _cached_model.exists():
-        _add_data_if_exists(_cached_model, f"insightface_models/models/{_model_name}")
+_cached_model = Path.home() / ".cache" / "insightface" / "models" / "buffalo_s"
+if _cached_model.exists():
+    _add_data_if_exists(_cached_model, "insightface_models/models/buffalo_s")
 
 # ffmpeg runtime (optional)
 _add_data_if_exists(PROJECT_ROOT / "ffmpeg_runtime", "ffmpeg_runtime")
@@ -103,10 +101,10 @@ hidden_modules = [
     "uvicorn.protocols.http.auto",
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
+    "onnxruntime",
     "insightface",
     "insightface.app",
     "insightface.model_zoo",
-    "onnxruntime",
     "sqlite3",
     "cryptography",
     "PySide6",
@@ -124,7 +122,7 @@ all_datas = list(datas)
 all_binaries = []
 all_hiddenimports = list(hidden_modules)
 
-for mod in ["uvicorn", "insightface", "onnxruntime"]:
+for mod in ["uvicorn", "onnxruntime", "insightface"]:
     try:
         m_datas, m_binaries, m_hidden = collect_all(mod)
         all_datas.extend(m_datas)

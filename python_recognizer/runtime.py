@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
+from python_recognizer.custom_pipeline import CustomONNXFacePipeline
 
 from python_recognizer.providers import select_best_provider
 from python_recognizer.store import normalize_embedding
@@ -37,23 +37,18 @@ def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
 
 
 def cosine_to_calibrated_confidence(cosine_score: float) -> float:
-    """Converts raw ArcFace cosine similarity into a calibrated 0-100% confidence probability.
-    
-    ArcFace cosine space:
-    - Imposter scores (different people): <= 0.25
-    - Genuine matches (same person across CCTV angles/lighting): 0.35 - 0.75
-    """
-    if cosine_score < 0.25:
-        return max(0.0, round(cosine_score * 1.2, 3))
+    """Converts raw ArcFace cosine similarity into a calibrated 0-100% confidence probability."""
+    if cosine_score < 0.45:
+        return max(0.0, round(cosine_score * 0.8, 3))
     elif cosine_score < 0.70:
-        # Map [0.35, 0.70] -> [50%, 94%]
-        ratio = (cosine_score - 0.35) / 0.35
-        prob = 0.50 + max(0.0, ratio) * 0.44
-        return round(min(0.94, prob), 3)
+        # Map [0.45, 0.70] -> [60%, 92%]
+        ratio = (cosine_score - 0.45) / 0.25
+        prob = 0.60 + max(0.0, ratio) * 0.32
+        return round(min(0.92, prob), 3)
     else:
-        # Map [0.70, 1.00] -> [94%, 99.5%]
+        # Map [0.70, 1.00] -> [92%, 99.5%]
         ratio = (cosine_score - 0.70) / 0.30
-        prob = 0.94 + min(1.0, ratio) * 0.055
+        prob = 0.92 + min(1.0, ratio) * 0.075
         return round(min(0.995, prob), 3)
 
 
@@ -81,8 +76,8 @@ class ModelEngineManager:
         self.primary_provider, self.provider_list = select_best_provider(user_providers)
         logger.info("Active ONNX Execution Providers: %s", self.provider_list)
 
-        self._student_model: Optional[FaceAnalysis] = None
-        self._teacher_model: Optional[FaceAnalysis] = None
+        self._student_model: Optional[CustomONNXFacePipeline] = None
+        self._teacher_model: Optional[CustomONNXFacePipeline] = None
         self._lock = threading.Lock()
         
         # Load primary student model
@@ -90,64 +85,12 @@ class ModelEngineManager:
 
     def _load_student_model(self) -> None:
         with self._lock:
-            custom_onnx_dir = Path("weights/custom_student")
-            custom_onnx_file = custom_onnx_dir / "student_std_512d_int8.onnx"
+            self._student_model = CustomONNXFacePipeline()
+            self.is_custom_model_active = True
 
-            # If user explicitly sets INSIGHTFACE_MODEL=custom_student or leaves it default/auto while custom weights exist
-            use_custom = (self.student_model_name == "custom_student") or (
-                self.student_model_name not in {"buffalo_l", "buffalo_s"} and custom_onnx_file.exists()
-            )
-
-            if use_custom:
-                logger.info("Loading Custom Distilled Student Model (%s)...", custom_onnx_file if custom_onnx_file.exists() else self.student_model_name)
-                self.is_custom_model_active = True
-                self._student_model = FaceAnalysis(
-                    name="buffalo_s",
-                    root=self._model_dir,
-                    providers=self.provider_list,
-                    allowed_modules=["detection", "recognition"],
-                )
-                self._student_model.prepare(
-                    ctx_id=-1,
-                    det_size=self.det_size,
-                    det_thresh=self.det_thresh
-                )
-            else:
-                self.is_custom_model_active = False
-                logger.info("Loading student runtime model (%s)...", self.student_model_name)
-                self._student_model = FaceAnalysis(
-                    name=self.student_model_name,
-                    root=self._model_dir,
-                    providers=self.provider_list,
-                    allowed_modules=["detection", "recognition"],
-                )
-                self._student_model.prepare(
-                    ctx_id=-1,
-                    det_size=self.det_size,
-                    det_thresh=self.det_thresh
-                )
-
-    def _ensure_teacher_model(self) -> FaceAnalysis:
-        """Lazy load teacher model (buffalo_l) on first fallback demand."""
-        if self._teacher_model is not None:
-            return self._teacher_model
-
-        with self._lock:
-            if self._teacher_model is None:
-                logger.info("Lazy loading teacher model (%s) for high-accuracy fallback...", self.teacher_model_name)
-                try:
-                    teacher = FaceAnalysis(
-                        name=self.teacher_model_name,
-                        root=self._model_dir,
-                        providers=self.provider_list,
-                        allowed_modules=["detection", "recognition"],
-                    )
-                    teacher.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.det_thresh)
-                    self._teacher_model = teacher
-                except Exception as exc:
-                    logger.warning("Teacher model (%s) failed to load: %s. Falling back to student model.", self.teacher_model_name, exc)
-                    self._teacher_model = self._student_model
-        return self._teacher_model
+    def _ensure_teacher_model(self) -> CustomONNXFacePipeline:
+        """Teacher fallback is intentionally disabled in the offline runtime."""
+        return self._student_model or CustomONNXFacePipeline()
 
     def detect_faces(self, image: np.ndarray, max_dim: int = 720) -> List[Any]:
         """Detect faces in BGR frame using shared detector model."""
@@ -220,9 +163,9 @@ class ModelEngineManager:
         self,
         embedding: np.ndarray,
         gallery: List[Dict[str, Any]],
-        match_threshold: float = 0.45,
-        ambiguity_min: float = 0.35,
-        ambiguity_max: float = 0.48,
+        match_threshold: float = 0.52,
+        ambiguity_min: float = 0.42,
+        ambiguity_max: float = 0.55,
         face_crop: Optional[np.ndarray] = None,
         telemetry_collector: Optional[Any] = None,
     ) -> Tuple[Optional[Dict[str, Any]], float, bool]:

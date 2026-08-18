@@ -56,9 +56,12 @@ class BackendProcess:
         env["PYTHON_DB_PATH"] = str(db_path)
         os.environ["PYTHON_DB_PATH"] = str(db_path)
         env.setdefault("SNAPSHOT_PATH", str(snapshot_path))
-        bundled_model_dir = bundled_resource("insightface_models")
-        if bundled_model_dir.exists():
-            env.setdefault("INSIGHTFACE_MODEL_DIR", str(bundled_model_dir))
+        custom_model_dir = bundled_resource("weights", "custom_student")
+        if custom_model_dir.exists():
+            env.setdefault("CUSTOM_RECOGNIZER_MODEL", str(custom_model_dir / "student_std_512d_int8.onnx"))
+        bundled_insightface = bundled_resource("insightface_models")
+        if bundled_insightface.exists():
+            env.setdefault("INSIGHTFACE_MODEL_DIR", str(bundled_insightface))
         bundled_ffmpeg = bundled_resource("ffmpeg_runtime", "ffmpeg")
         if bundled_ffmpeg.exists():
             env.setdefault("FFMPEG_PATH", str(bundled_ffmpeg))

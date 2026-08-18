@@ -21,7 +21,7 @@ Production-ready Node.js 22 + TypeScript service that consumes an RTSP CCTV stre
 
 - Node.js 22+
 - FFmpeg available on `PATH`
-- For the Python backend: Python 3.11+ with the `insightface` model downloads available at runtime
+- For the Python backend: Python 3.11+ with the bundled custom ONNX recognizer; no model download is required
 
 ## Configuration
 
@@ -30,7 +30,8 @@ Copy `.env.example` to `.env` and update values:
 ```bash
 SNAPSHOT_PATH=./snapshots
 DETECTION_THRESHOLD=0.75
-MATCH_THRESHOLD=0.45
+MATCH_THRESHOLD=0.70
+MATCH_MARGIN=0.10
 STREAM_FRAME_RATE=10
 FRAME_RATE=2
 PORT=3000
@@ -41,7 +42,8 @@ Required variables:
 
 - `SNAPSHOT_PATH`: Directory where detection snapshots are saved. Defaults to `./snapshots`.
 - `DETECTION_THRESHOLD`: Minimum face confidence from `0` to `1`. Defaults to `0.75`.
-- `MATCH_THRESHOLD`: Minimum descriptor similarity for a known-face match. Defaults to `0.45`.
+- `MATCH_THRESHOLD`: Minimum descriptor similarity for a known-face match. Defaults to `0.70`.
+- `MATCH_MARGIN`: Required score gap between the best and second-best employee. Defaults to `0.10`; ambiguous faces remain unknown.
 - `STREAM_FRAME_RATE`: FPS used for the browser preview stream. Defaults to `10`.
 - `FRAME_RATE`: Detection sampling rate in FPS. Defaults to `2`.
 - `RECOGNITION_BACKEND`: Set to `python` for the stronger Python recognition path. Defaults to `node`.
@@ -83,6 +85,21 @@ cd python_recognizer
 pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 5055
 ```
+
+### Training the custom recognizer
+
+Training requires a public dataset arranged as `dataset/<identity>/<image>`.
+Use `scripts/train_public_face_model.py` in a training-only environment:
+
+```bash
+python -m pip install -r training-requirements.txt
+python scripts/train_public_face_model.py --dataset /path/to/identity-folder-dataset --epochs 25
+python scripts/verify_offline_runtime.py
+```
+
+The script uses buffalo_l only to generate teacher embeddings during training; it is not included in the client runtime. Re-register local employees after exporting the model.
+
+Public face datasets such as CelebA and many VGGFace/CASIA derivatives are commonly restricted to non-commercial research use. Obtain a license for any dataset used to train a commercial product, and do not redistribute restricted training images or weights without permission.
 
 
 ## API

@@ -40,7 +40,7 @@ ICON_FILE = PROJECT_ROOT / "resources" / "icon.icns"  # optional
 RESOURCES = [
     PROJECT_ROOT / "python_recognizer" / "data" / "app.db",
     PROJECT_ROOT / "licenses" / "public_key.pem",
-    PROJECT_ROOT / "insightface_models",
+    PROJECT_ROOT / "weights" / "custom_student",
     PROJECT_ROOT / "ffmpeg_runtime",
     PROJECT_ROOT / "ui",
     PROJECT_ROOT / "resources",

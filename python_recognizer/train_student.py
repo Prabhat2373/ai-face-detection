@@ -135,15 +135,17 @@ if TORCH_AVAILABLE:
             planes = expansion * in_planes
             self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
             self.bn1 = nn.BatchNorm2d(planes)
+            self.act1 = nn.LeakyReLU(0.25, inplace=False)
             self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, groups=planes, bias=False)
             self.bn2 = nn.BatchNorm2d(planes)
+            self.act2 = nn.LeakyReLU(0.25, inplace=False)
             self.conv3 = nn.Conv2d(planes, out_planes, kernel_size=1, bias=False)
             self.bn3 = nn.BatchNorm2d(out_planes)
             self.use_residual = (stride == 1 and in_planes == out_planes)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            out = F.prelu(self.bn1(self.conv1(x)), torch.tensor(0.25).to(x.device))
-            out = F.prelu(self.bn2(self.conv2(out)), torch.tensor(0.25).to(x.device))
+            out = self.act1(self.bn1(self.conv1(x)))
+            out = self.act2(self.bn2(self.conv2(out)))
             out = self.bn3(self.conv3(out))
             if self.use_residual:
                 out = out + x
@@ -164,6 +166,7 @@ if TORCH_AVAILABLE:
 
             self.conv1 = nn.Conv2d(3, c1, kernel_size=3, stride=2, padding=1, bias=False)
             self.bn1 = nn.BatchNorm2d(c1)
+            self.act1 = nn.LeakyReLU(0.25, inplace=False)
 
             self.layer1 = Bottleneck(c1, c1, stride=2)
             self.layer2 = Bottleneck(c1, c2, stride=2)
@@ -171,16 +174,17 @@ if TORCH_AVAILABLE:
 
             self.conv_dw = nn.Conv2d(c3, c3, kernel_size=7, groups=c3, bias=False)
             self.bn_dw = nn.BatchNorm2d(c3)
+            self.act_dw = nn.LeakyReLU(0.25, inplace=False)
 
             self.linear = nn.Linear(c3, embedding_dim, bias=False)
             self.bn_linear = nn.BatchNorm1d(embedding_dim)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            out = F.prelu(self.bn1(self.conv1(x)), torch.tensor(0.25).to(x.device))
+            out = self.act1(self.bn1(self.conv1(x)))
             out = self.layer1(out)
             out = self.layer2(out)
             out = self.layer3(out)
-            out = self.bn_dw(self.conv_dw(out))
+            out = self.act_dw(self.bn_dw(self.conv_dw(out)))
             out = out.view(out.size(0), -1)
             out = self.bn_linear(self.linear(out))
             return F.normalize(out, p=2, dim=1)
@@ -244,6 +248,55 @@ if TORCH_AVAILABLE:
             return total_loss, loss_arc, loss_feat
 
 
+    class FaceDistillationDataset(Dataset):
+        """Loads face crops and precomputes teacher embeddings for distillation."""
+
+        def __init__(self, dataset_dir: Path, teacher_app) -> None:
+            self.samples = []
+            self.labels = []
+            self.teacher_embs = []
+
+            identity_dirs = sorted([d for d in dataset_dir.iterdir() if d.is_dir()])
+            self.class_to_idx = {d.name: i for i, d in enumerate(identity_dirs)}
+
+            rec_model = teacher_app.models['recognition']
+
+            print(f"Precomputing teacher embeddings for dataset in {dataset_dir}...")
+            for identity_dir in identity_dirs:
+                label_idx = self.class_to_idx[identity_dir.name]
+                image_paths = list(identity_dir.glob("*.jpg")) + list(identity_dir.glob("*.png"))
+                for img_path in image_paths:
+                    bgr_img = cv2.imread(str(img_path))
+                    if bgr_img is None:
+                        continue
+                    bgr_crop = cv2.resize(bgr_img, (112, 112))
+
+                    # Precompute teacher embedding using w600k_r50
+                    feat = rec_model.get_feat(bgr_crop).squeeze(0)
+                    feat = feat / (np.linalg.norm(feat) + 1e-12)
+
+                    # Student input preprocessing: [0, 255] RGB -> [-1, 1] RGB
+                    rgb_crop = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2RGB).astype(np.float32)
+                    student_input = (rgb_crop / 127.5) - 1.0
+                    student_input = np.transpose(student_input, (2, 0, 1))
+
+                    self.samples.append(student_input)
+                    self.labels.append(label_idx)
+                    self.teacher_embs.append(feat)
+
+            print(f"Successfully loaded {len(self.samples)} samples across {len(identity_dirs)} identities.")
+
+        def __len__(self) -> int:
+            return len(self.samples)
+
+        def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            return (
+                torch.tensor(self.samples[idx], dtype=torch.float32),
+                torch.tensor(self.teacher_embs[idx], dtype=torch.float32),
+                torch.tensor(self.labels[idx], dtype=torch.long)
+            )
+
+
 # ---------------------------------------------------------------------------
 # Synthetic Open-Set Dataset Generator for Benchmark Training
 # ---------------------------------------------------------------------------
@@ -302,7 +355,10 @@ class RealSnapshotDatasetExtractor:
     def extract(self) -> Path:
         real_images: List[Path] = []
         if self.snapshots_dir.exists():
-            real_images.extend(list(self.snapshots_dir.glob("*.jpg")) + list(self.snapshots_dir.glob("*.png")))
+            snaps = list(self.snapshots_dir.glob("*.jpg")) + list(self.snapshots_dir.glob("*.png"))
+            # Sort by modified time descending and limit to 100
+            snaps = sorted(snaps, key=lambda x: x.stat().st_mtime, reverse=True)[:100]
+            real_images.extend(snaps)
         if self.samples_dir.exists():
             real_images.extend(list(self.samples_dir.rglob("*.jpg")) + list(self.samples_dir.rglob("*.png")))
 
@@ -311,18 +367,12 @@ class RealSnapshotDatasetExtractor:
 
         logger.info("Extracting %d real user snapshot images for custom model distillation...", len(real_images))
 
-        detector = None
-        haar_cascade = None
-        try:
-            from insightface.app import FaceAnalysis
-            detector = FaceAnalysis(name="buffalo_l", allowed_modules=["detection"], providers=["CPUExecutionProvider"])
-            detector.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.30)
-        except Exception as exc:
-            logger.warning("FaceAnalysis detector initialization fallback: %s", exc)
-            try:
-                haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            except Exception:
-                pass
+        from insightface.app import FaceAnalysis
+        from insightface.utils import face_align
+        detector = FaceAnalysis(name="buffalo_s", allowed_modules=["detection"])
+        detector.prepare(ctx_id=-1, det_size=(640, 640))
+
+        haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
         count = 0
         for img_path in real_images:
@@ -340,18 +390,16 @@ class RealSnapshotDatasetExtractor:
             person_dir.mkdir(parents=True, exist_ok=True)
 
             face_crops = []
-            if detector is not None:
-                try:
-                    detected_faces = detector.get(img)
-                    for face in detected_faces:
-                        box = face.bbox.astype(int)
-                        x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-                        if (x2 - x1) >= 20 and (y2 - y1) >= 20:
-                            face_crops.append(img[y1:y2, x1:x2])
-                except Exception:
-                    pass
+            try:
+                # Try high-quality face detection and alignment first
+                faces = detector.get(img)
+                for face in faces:
+                    aligned_crop = face_align.norm_crop(img, landmark=face.kps)
+                    face_crops.append(aligned_crop)
+            except Exception as e:
+                logger.warning("FaceAnalysis detection failed: %s", e)
 
-            if not face_crops and haar_cascade is not None:
+            if not face_crops and haar_cascade is not None and not haar_cascade.empty():
                 try:
                     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                     rects = haar_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
@@ -416,6 +464,17 @@ class StudentTrainer:
         identity_dirs = [d for d in self.dataset_dir.iterdir() if d.is_dir()]
         num_classes = max(1, len(identity_dirs))
 
+        # Initialize teacher model to precompute target embeddings
+        from insightface.app import FaceAnalysis
+        teacher_app = FaceAnalysis(name="buffalo_l")
+        teacher_app.prepare(ctx_id=-1, det_size=(640, 640))
+
+        # Build training dataset
+        dataset = FaceDistillationDataset(self.dataset_dir, teacher_app)
+        if len(dataset) == 0:
+            raise RuntimeError("Training dataset is empty!")
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=(len(dataset) > self.batch_size))
+
         # Build PyTorch student model
         student_model = MobileFaceNet(variant=self.variant, embedding_dim=self.embedding_dim).to(self.device)
         criterion = ArcFaceDistillationLoss(num_classes=num_classes, embedding_dim=self.embedding_dim).to(self.device)
@@ -424,23 +483,24 @@ class StudentTrainer:
 
         # Distillation training execution loop
         student_model.train()
-        steps_per_epoch = 10
         for epoch in range(self.epochs):
             total_loss = 0.0
-            for _ in range(steps_per_epoch):
-                fake_crops = torch.randn(self.batch_size, 3, 112, 112).to(self.device)
-                fake_teacher_emb = F.normalize(torch.randn(self.batch_size, 512).to(self.device), p=2, dim=1)
-                fake_labels = torch.randint(0, num_classes, (self.batch_size,)).to(self.device)
+            count_steps = 0
+            for crops, teacher_embs, labels in dataloader:
+                crops = crops.to(self.device)
+                teacher_embs = teacher_embs.to(self.device)
+                labels = labels.to(self.device)
 
                 optimizer.zero_grad()
-                student_emb = student_model(fake_crops)
-                loss, loss_arc, loss_feat = criterion(student_emb, fake_teacher_emb, fake_labels)
+                student_emb = student_model(crops)
+                loss, loss_arc, loss_feat = criterion(student_emb, teacher_embs, labels)
                 loss.backward()
                 optimizer.step()
                 total_loss += float(loss.item())
+                count_steps += 1
 
             scheduler.step()
-            avg_loss = total_loss / float(steps_per_epoch)
+            avg_loss = total_loss / max(1, count_steps)
             if (epoch + 1) % 5 == 0 or epoch == self.epochs - 1:
                 print(f" Epoch [{epoch+1}/{self.epochs}] Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
 

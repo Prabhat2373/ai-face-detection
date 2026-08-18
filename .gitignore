@@ -172,6 +172,16 @@ packaging/*.dmg
 *.safetensors
 *.bin
 python_recognizer/*.pt
+weights/*_fp32.onnx
+weights/**/*_fp32.onnx
+weights/**/*fp32*
+
+# The bundled custom recognizer is a required release artifact (INT8 only, < 10 MB).
+!weights/
+!weights/custom_student/
+!weights/custom_student/*int8.onnx
+!weights/detectors/
+!weights/detectors/*.onnx
 
 # Logs produced during packaging
 packaging/logs/
