@@ -18,6 +18,19 @@ from insightface.app import FaceAnalysis
 
 
 
+# Limit intra-op threads to 1 to prevent CPU thread starvation across multi-camera streams
+for var in (
+    "OMP_NUM_THREADS",
+    "ORT_INTRA_OP_NUM_THREADS",
+    "ORT_INTER_OP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(var, "1")
+
+
 def _normalize_embedding(vector: np.ndarray) -> np.ndarray:
     norm = float(np.linalg.norm(vector))
     return vector if norm <= 0 else vector / norm
@@ -28,7 +41,13 @@ class DetectedFace:
     bbox: np.ndarray
     det_score: float
     kps: np.ndarray | None
-    normed_embedding: np.ndarray
+    crop: np.ndarray | None = None
+    normed_embedding: np.ndarray | None = None
+    quality_score: float = 1.0
+    sharpness: float = 100.0
+    is_sharp: bool = True
+    illumination: float = 128.0
+    is_processable: bool = True
 
 
 class SCRFDDetector:
@@ -110,16 +129,21 @@ class CustomONNXFacePipeline:
 
     def __init__(self, model_path: str | Path | None = None, detection_scale: float = 1.0) -> None:
         configured = model_path or os.getenv("CUSTOM_RECOGNIZER_MODEL")
-        self.model_path = Path(configured) if configured else Path("weights/custom_student/student_std_512d_int8.onnx")
-        if not self.model_path.is_absolute():
-            self.model_path = Path(__file__).resolve().parents[1] / self.model_path
+        if configured and Path(configured).exists():
+            self.model_path = Path(configured)
+            if not self.model_path.is_absolute():
+                self.model_path = Path(__file__).resolve().parents[1] / self.model_path
+        else:
+            candidates = [
+                Path(__file__).resolve().parents[1] / "weights" / "custom_student" / "resnet50_512d_int8.onnx",
+                Path(__file__).resolve().parents[1] / "weights" / "custom_student" / "student_std_512d_int8.onnx",
+                Path.home() / ".insightface" / "models" / "buffalo_l" / "w600k_r50.onnx",
+                Path.home() / ".insightface" / "models" / "buffalo_s" / "w600k_mbf.onnx",
+            ]
+            self.model_path = next((p for p in candidates if p.exists()), candidates[0])
+
         if not self.model_path.exists():
-            # Fallback to local buffalo_s w600k_mbf if needed
-            b_s = Path.home() / ".insightface" / "models" / "buffalo_s" / "w600k_mbf.onnx"
-            if b_s.exists():
-                self.model_path = b_s
-            else:
-                raise FileNotFoundError(f"Recognition model not found: {self.model_path}")
+            raise FileNotFoundError(f"Recognition model not found: {self.model_path}")
 
         try:
             import onnxruntime as ort
@@ -128,7 +152,8 @@ class CustomONNXFacePipeline:
 
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = min(4, max(1, os.cpu_count() or 1))
+        sess_options.intra_op_num_threads = 1
+        sess_options.inter_op_num_threads = 1
 
         providers = [p.strip() for p in os.getenv("CUSTOM_ONNX_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()]
         available = set(ort.get_available_providers())
@@ -155,30 +180,96 @@ class CustomONNXFacePipeline:
             providers=[p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()],
             allowed_modules=["detection"],
         )
-        self.detector.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=float(os.getenv("DETECTION_THRESHOLD", "0.35")))
+        det_size_cfg = int(os.getenv("INSIGHTFACE_DET_SIZE", "320"))
+        det_thresh_cfg = float(os.getenv("DETECTION_THRESHOLD", "0.45"))
+        self.detector.prepare(ctx_id=-1, det_size=(det_size_cfg, det_size_cfg), det_thresh=det_thresh_cfg)
 
     @staticmethod
     def enhance_crop(crop: np.ndarray) -> np.ndarray:
-        """Fast low-light contrast enhancement and motion-blur deblurring."""
+        """Advanced CCTV lighting and contrast enhancement for low light & shadowed faces."""
         if crop is None or crop.size == 0:
             return crop
-        # 1. CLAHE in LAB space only if image is underexposed
         lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
-        if np.mean(l) < 105:
-            clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(4, 4))
+        mean_l = float(np.mean(l))
+        # Deep shadow / underexposed compensation (< 65 luminance)
+        if mean_l < 65:
+            clip = min(3.5, max(1.8, (70.0 - mean_l) / 15.0))
+            clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(4, 4))
             l = clahe.apply(l)
+            # Dynamic gamma correction for very dark CCTV footage (exponent < 1.0 brightens)
+            if mean_l < 45:
+                gamma_exp = max(0.40, mean_l / 70.0)
+                table = np.array([((i / 255.0) ** gamma_exp) * 255 for i in range(256)]).astype("uint8")
+                l = cv2.LUT(l, table)
             lab = cv2.merge((l, a, b))
-            crop = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        elif mean_l > 215:
+            # Glare / overexposure reduction
+            l = cv2.equalizeHist(l)
+            lab = cv2.merge((l, a, b))
+            return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        return crop
 
-        # 2. Fast Unsharp Masking for fast motion-blur sharpening
-        blur = cv2.GaussianBlur(crop, (0, 0), 1.5)
-        return cv2.addWeighted(crop, 1.35, blur, -0.35, 0)
+    @staticmethod
+    def assess_face_quality(
+        crop: np.ndarray,
+        kps: np.ndarray | None,
+        bbox: np.ndarray,
+        det_score: float,
+    ) -> tuple[float, float, bool, float, bool]:
+        """Compute Face Image Quality Assessment (FIQA) metrics:
+        Returns: (quality_score, sharpness, is_sharp, illumination, is_processable)
+        """
+        if crop is None or crop.size == 0:
+            return 0.0, 0.0, False, 0.0, False
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        is_sharp = sharpness >= 28.0
+
+        lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB) if crop.ndim == 3 else None
+        illumination = float(np.mean(lab[:, :, 0])) if lab is not None else float(np.mean(gray))
+
+        w = float(max(1.0, bbox[2] - bbox[0]))
+        h = float(max(1.0, bbox[3] - bbox[1]))
+
+        is_geometry_valid = True
+        if kps is not None and len(kps) >= 5:
+            try:
+                left_eye, right_eye, nose, left_mouth, right_mouth = kps[:5]
+                eye_center_y = (float(left_eye[1]) + float(right_eye[1])) / 2.0
+                mouth_center_y = (float(left_mouth[1]) + float(right_mouth[1])) / 2.0
+                nose_y = float(nose[1])
+
+                # Pitch / looking down at floor or phone
+                if (mouth_center_y - eye_center_y) < h * 0.15 or (nose_y - eye_center_y) < h * 0.04:
+                    is_geometry_valid = False
+
+                # Yaw / profile asymmetry
+                left_dist = abs(float(nose[0]) - float(left_eye[0]))
+                right_dist = abs(float(right_eye[0]) - float(nose[0]))
+                yaw_ratio = min(left_dist, right_dist) / max(1.0, max(left_dist, right_dist))
+                if yaw_ratio < 0.15:
+                    is_geometry_valid = False
+            except Exception:
+                pass
+
+        sharpness_factor = min(1.0, sharpness / 80.0)
+        illum_factor = max(0.0, 1.0 - abs(illumination - 128.0) / 128.0)
+        det_factor = min(1.0, max(0.0, det_score))
+        quality_score = float(0.4 * sharpness_factor + 0.3 * illum_factor + 0.3 * det_factor)
+        if not is_geometry_valid:
+            quality_score *= 0.5
+
+        is_processable = (sharpness >= 22.0) and (illumination >= 22.0) and (illumination <= 245.0) and is_geometry_valid
+        return quality_score, sharpness, is_sharp, illumination, is_processable
 
     def _embedding(self, crop: np.ndarray) -> np.ndarray:
-        enhanced = self.enhance_crop(crop)
-        resized = cv2.resize(enhanced, self.input_size, interpolation=cv2.INTER_AREA)
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32)
+        crop = self.enhance_crop(crop)
+        if (crop.shape[0], crop.shape[1]) != self.input_size:
+            crop = cv2.resize(crop, self.input_size, interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
         tensor = (rgb / 127.5) - 1.0
         tensor = np.transpose(tensor, (2, 0, 1))[None, ...]
         output = self.session.run([self.output_name], {self.input_name: tensor})[0]
@@ -194,7 +285,10 @@ class CustomONNXFacePipeline:
         x2, y2 = min(image.shape[1], x + w + pad_x), min(image.shape[0], y + h + pad_y)
         return image[y1:y2, x1:x2]
 
-    def get(self, image: np.ndarray) -> list[DetectedFace]:
+    def embedding_for_crop(self, crop: np.ndarray) -> np.ndarray:
+        return self._embedding(crop)
+
+    def get(self, image: np.ndarray, compute_embeddings: bool = False) -> list[DetectedFace]:
         if image is None or image.size == 0:
             return []
         detections = self.detector.get(image)
@@ -213,10 +307,24 @@ class CustomONNXFacePipeline:
 
             if crop.size == 0:
                 continue
+
+            det_score = float(getattr(detection, "det_score", 0.0))
+            q_score, sharpness, is_sharp, illum, is_proc = self.assess_face_quality(
+                crop, kps, box, det_score
+            )
+
+            emb = self._embedding(crop) if compute_embeddings else None
+
             faces.append(DetectedFace(
                 bbox=np.asarray([x, y, x2, y2], dtype=np.float32),
-                det_score=float(getattr(detection, "det_score", 0.0)),
+                det_score=det_score,
                 kps=kps,
-                normed_embedding=self._embedding(crop),
+                crop=crop,
+                normed_embedding=emb,
+                quality_score=q_score,
+                sharpness=sharpness,
+                is_sharp=is_sharp,
+                illumination=illum,
+                is_processable=is_proc,
             ))
         return faces

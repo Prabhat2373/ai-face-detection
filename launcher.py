@@ -176,12 +176,40 @@ _INSTANCE_MUTEX = None
 
 def _show_startup_error(title: str, message: str) -> None:
     """Show a diagnostic error even when the packaged app has no console."""
-    log_lines = [
-        "Please send these logs to support:",
-        str(Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "OtenceIntelligence" / "logs" / "launcher.log"),
-        str(Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "FaceAgent" / "logs" / "backend.log"),
-        str(Path(os.getenv("TEMP", str(Path.cwd()))) / "OtenceIntelligence" / "backend.log"),
-    ]
+    log_candidates: list[str] = []
+    try:
+        from python_recognizer.store import get_platform_data_dir
+        data_dir = get_platform_data_dir()
+        log_candidates.append(str(data_dir / "logs" / "launcher.log"))
+        log_candidates.append(str(data_dir / "logs" / "backend.log"))
+    except Exception:
+        pass
+
+    if sys.platform == "win32":
+        log_candidates.extend([
+            str(Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "OtenceIntelligence" / "logs" / "launcher.log"),
+            str(Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "FaceAgent" / "logs" / "backend.log"),
+            str(Path(os.getenv("TEMP", str(Path.cwd()))) / "OtenceIntelligence" / "backend.log"),
+        ])
+    elif sys.platform == "darwin":
+        log_candidates.extend([
+            str(Path.home() / "Library" / "Application Support" / "OtenceIntelligence" / "logs" / "launcher.log"),
+            str(Path.home() / "Library" / "Application Support" / "FaceAgent" / "logs" / "backend.log"),
+        ])
+    else:
+        log_candidates.extend([
+            str(Path.home() / ".local" / "share" / "OtenceIntelligence" / "logs" / "launcher.log"),
+            str(Path.home() / ".local" / "share" / "FaceAgent" / "logs" / "backend.log"),
+        ])
+
+    seen: set[str] = set()
+    unique_logs: list[str] = []
+    for log_p in log_candidates:
+        if log_p not in seen:
+            seen.add(log_p)
+            unique_logs.append(log_p)
+
+    log_lines = ["Please send these logs to support:"] + unique_logs
     text = f"{message}\n\n" + "\n".join(log_lines)
     if os.name == "nt":
         try:
@@ -433,14 +461,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             else:
                 print("Starting packaged backend (hidden)...")
                 backend_proc = BackendProcess()
-                backend_proc.start()
+                backend_proc.start(timeout=BACKEND_STARTUP_TIMEOUT)
                 started_backend = True
-                print("Waiting for backend to become healthy...")
-                ok = wait_until_backend_ready()
-                if not ok:
-                    print("Warning: backend did not become healthy within timeout. You may check backend logs if there are issues.", file=sys.stderr)
-                else:
-                    print("Backend is healthy.")
+                print("Backend is healthy.")
         except Exception as exc:
             print("Failed to start backend:", exc, file=sys.stderr)
             _show_startup_error(
@@ -617,10 +640,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 backend_proc = BackendProcess() if BackendProcess is not None else None
                 if backend_proc is None:
                     return 12
-                backend_proc.start()
+                backend_proc.start(timeout=BACKEND_STARTUP_TIMEOUT)
                 started_backend = True
-                if not wait_until_backend_ready():
-                    print("Warning: restarted backend did not become healthy.", file=sys.stderr)
                 continue
         break
 

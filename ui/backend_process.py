@@ -31,13 +31,16 @@ class BackendProcess:
         self.process: subprocess.Popen | None = None
         self.log_path: Path | None = None
 
-    def start(self) -> None:
+    def start(self, timeout: float | None = None) -> None:
         if os.getenv("FACEAGENT_AUTO_START_BACKEND", "true").lower() not in {"1", "true", "yes", "on"}:
             return
         if self.process is not None and self.process.poll() is None:
             return
         if is_backend_ready():
             return
+
+        if timeout is None:
+            timeout = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "60.0"))
 
         env = os.environ.copy()
         env.setdefault("FACEAGENT_BACKEND_URL", BACKEND_URL)
@@ -58,7 +61,13 @@ class BackendProcess:
         env.setdefault("SNAPSHOT_PATH", str(snapshot_path))
         custom_model_dir = bundled_resource("weights", "custom_student")
         if custom_model_dir.exists():
-            env.setdefault("CUSTOM_RECOGNIZER_MODEL", str(custom_model_dir / "student_std_512d_int8.onnx"))
+            candidates = [
+                custom_model_dir / "resnet50_512d_int8.onnx",
+                custom_model_dir / "student_std_512d_int8.onnx",
+            ]
+            chosen = next((p for p in candidates if p.exists()), None)
+            if chosen:
+                env.setdefault("CUSTOM_RECOGNIZER_MODEL", str(chosen))
         bundled_insightface = bundled_resource("insightface_models")
         if bundled_insightface.exists():
             env.setdefault("INSIGHTFACE_MODEL_DIR", str(bundled_insightface))
@@ -109,29 +118,41 @@ class BackendProcess:
         self.process = subprocess.Popen(args, **popen_kwargs)
         if log_handle is not None:
             log_handle.close()
-        if not self._wait_until_ready():
+        if not self._wait_until_ready(timeout=timeout):
             # Do not leave a crash-looping child behind. The caller can show a
             # single startup failure and the user can retry deliberately.
-            self.stop()
-            exit_code = self.process.poll()
+            exit_code = self.stop()
             detail = f" (exit code {exit_code})" if exit_code is not None else ""
             log_hint = f"\nBackend log: {self.log_path}" if self.log_path else ""
-            raise RuntimeError(f"Local backend failed to become ready{detail}.{log_hint}")
+            raise RuntimeError(f"Local backend failed to become ready within {int(timeout)}s{detail}.{log_hint}")
 
-    def stop(self) -> None:
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        self.process = None
+    def stop(self) -> int | None:
+        exit_code = None
+        if self.process is not None:
+            proc = self.process
+            self.process = None
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    exit_code = proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    exit_code = proc.wait()
+            else:
+                exit_code = proc.poll()
+        return exit_code
 
-    def _wait_until_ready(self) -> bool:
-        for _ in range(40):
+    def _wait_until_ready(self, timeout: float = 60.0) -> bool:
+        deadline = time.time() + timeout
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
             if is_backend_ready(timeout=0.5):
                 return True
-            time.sleep(0.25)
+            # Fast fail if the backend process already exited or crashed
+            if self.process is not None and self.process.poll() is not None:
+                return False
+            time.sleep(min(0.25 + attempt * 0.05, 1.0))
         return False
 
     def _copy_initial_data(self, db_path: Path, snapshot_path: Path) -> None:

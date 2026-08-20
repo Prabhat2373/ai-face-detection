@@ -215,9 +215,14 @@ class FaceEngine:
 
         self.match_threshold = parse_float_env(
             "PYTHON_MATCH_THRESHOLD",
-            parse_float_env("MATCH_THRESHOLD", 0.50),
+            parse_float_env("MATCH_THRESHOLD", 0.45),
         )
-        self.match_margin = parse_float_env("MATCH_MARGIN", 0.08)
+        # A one-person gallery has no runner-up, so a strict calibrated threshold is used.
+        self.single_person_match_threshold = parse_float_env(
+            "SINGLE_PERSON_MATCH_THRESHOLD",
+            max(self.match_threshold, 0.48),
+        )
+        self.match_margin = parse_float_env("MATCH_MARGIN", 0.06)
         self.detection_threshold = parse_float_env(
             "PYTHON_DETECTION_THRESHOLD",
             parse_float_env("DETECTION_THRESHOLD", 0.35),
@@ -249,7 +254,7 @@ class FaceEngine:
         downloads_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
         configured_alarm = os.getenv("ALARM_SOUND_PATH")
         self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else (default_alarm if default_alarm.exists() else downloads_alarm)
-        self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 10_000)
+        self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 30_000)
         self.alarm_unknown_frames = parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 1)
         self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", self.detection_threshold)
         self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
@@ -484,36 +489,12 @@ class FaceEngine:
             else:
                 scale = max_dim / h
                 new_w, new_h = int(w * scale), max_dim
-            model_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            model_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         else:
             model_image = image
 
         with self._model_lock:
             faces = self._model.get(model_image)
-
-            # Efficient long-range fallback: most frames use one inference
-            # pass. Only frames with no detected face get a 1.5x pass, which
-            # gives small hallway faces more pixels without doubling CPU use
-            # for every frame on low-end machines.
-            if not faces:
-                model_h, model_w = model_image.shape[:2]
-                fallback_max_dim = min(960, max_dim * 2)
-                fallback_scale = min(1.5, fallback_max_dim / max(model_h, model_w))
-                if fallback_scale > 1.0:
-                    fallback = cv2.resize(
-                        model_image,
-                        (int(model_w * fallback_scale), int(model_h * fallback_scale)),
-                        interpolation=cv2.INTER_CUBIC,
-                    )
-                    faces = self._model.get(fallback)
-                    if faces:
-                        for face in faces:
-                            if getattr(face, "bbox", None) is not None:
-                                face.bbox = face.bbox / fallback_scale
-                            if getattr(face, "kps", None) is not None:
-                                face.kps = face.kps / fallback_scale
-                            if getattr(face, "landmark", None) is not None:
-                                face.landmark = face.landmark / fallback_scale
 
         # Scale detection coordinates back to original image size
         if scale != 1.0 and faces:
@@ -554,32 +535,16 @@ class FaceEngine:
         clean_cam_id = camera_id.split("::")[-1] if camera_id and "::" in camera_id else camera_id
         camera_record = self.store.get_camera(clean_cam_id, tenant) if clean_cam_id else None
         camera_name = str(camera_record.get("name") or "") if camera_record else None
-        if unknown_faces:
-            now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
-            last_logged = float(self._camera_alarm_state[camera_key].get("last_logged_alarm_at") or 0.0)
-            # De-duplicate alarm logging: log 1 single alarm record per 5 seconds per camera
-            if now_ms - last_logged >= 5000.0:
-                self._camera_alarm_state[camera_key]["last_logged_alarm_at"] = now_ms
-                alarm_record = {
-                    "reason": "unknown_person",
-                    "cameraRole": camera_role,
-                    "cameraId": camera_id,
-                    "cameraName": camera_name,
-                    "timestamp": iso_now(),
-                    "faces": unknown_faces,
-                    "snapshot": snapshot,
-                }
-                self.store.enqueue_sync_event("alarm.triggered", alarm_record)
-            if should_alarm:
-                self._trigger_alarm(
-                    image,
-                    camera_role,
-                    camera_id,
-                    "unknown_person",
-                    unknown_faces,
-                    snapshot,
-                    camera_name,
-                )
+        if unknown_faces and should_alarm:
+            self._trigger_alarm(
+                image,
+                camera_role,
+                camera_id,
+                "unknown_person",
+                unknown_faces,
+                snapshot,
+                camera_name,
+            )
         effective_department_id = camera_department_id or (str(camera_record.get("department_id") or "") if camera_record else "")
         department_record = self.store.get_department(effective_department_id, tenant) if effective_department_id else None
         department_name = str(department_record.get("name") or "") if department_record else None
@@ -964,6 +929,9 @@ class FaceEngine:
             try:
                 frame_counter = 0
                 current_dept_id = camera_department_id
+                last_motion_thumb: np.ndarray | None = None
+                last_det_frame_idx = 0
+                last_faces_cache: list[dict[str, Any]] = []
                 while not stop_event.is_set():
                     if stream.process.poll() is not None:
                         exit_reason = self._drain_ffmpeg_stderr(stream, camera_id)
@@ -995,21 +963,7 @@ class FaceEngine:
                         except Exception:
                             pass
 
-                    # 2. Frame decimation: recognition runs at the configured
-                    # detection rate instead of processing every preview frame.
-                    detection_rate = max(1, parse_int_env_setting(self.store, "FRAME_RATE", 1))
-                    process_every = max(1, round(frame_rate / detection_rate))
-                    if frame_counter % process_every != 0:
-                        self._set_camera_frame_state(
-                            camera_id,
-                            running=True,
-                            last_state="streaming",
-                            latest_frame=latest_frame,
-                            last_error=None,
-                        )
-                        time.sleep(max(0.0, 1.0 / float(frame_rate)))
-                        continue
-
+                    # 2. Update camera streaming preview at full FPS
                     self._set_camera_frame_state(
                         camera_id,
                         running=True,
@@ -1022,18 +976,51 @@ class FaceEngine:
                     if frame is None:
                         time.sleep(0.005)
                         continue
-                    try:
-                        result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
+
+                    # 3. Ultra-fast motion check (0.05ms) using a 64x48 thumbnail
+                    small_gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 48), interpolation=cv2.INTER_NEAREST)
+                    has_motion = True
+                    if last_motion_thumb is not None:
+                        diff = cv2.absdiff(small_gray, last_motion_thumb)
+                        motion_score = float(np.mean(diff))
+                        has_motion = motion_score > 1.0
+                    last_motion_thumb = small_gray
+
+                    track_key = f"{camera_id or 'cam'}"
+                    active_tracks_count = len(self._active_tracks.get(track_key, []))
+
+                    # Detector-Tracker Interleaving:
+                    # When active face tracks exist, alternate detection every 2nd frame (half deep learning load)
+                    # When new motion enters, detect immediately
+                    # When static scene, run 1.0s heartbeat check
+                    if active_tracks_count > 0:
+                        should_detect = (frame_counter - last_det_frame_idx >= 2)
+                    elif has_motion:
+                        should_detect = True
+                    else:
+                        should_detect = (frame_counter - last_det_frame_idx >= frame_rate)
+
+                    if should_detect:
+                        try:
+                            last_det_frame_idx = frame_counter
+                            result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
+                            last_faces_cache = result.get("faces") or []
+                            self._set_camera_frame_state(
+                                camera_id,
+                                last_faces=last_faces_cache,
+                                last_detection=result.get("snapshot"),
+                                increment_processed=True,
+                            )
+                            logger.debug("Frame processed: %s", {"cameraId": camera_id, "state": result.get("state")})
+                        except Exception as exc:  # noqa: BLE001
+                            self._set_camera_frame_state(camera_id, increment_processed=True)
+                            logger.warning("Camera frame processing failed: %s", {"cameraId": camera_id, "err": str(exc)})
+                    else:
                         self._set_camera_frame_state(
                             camera_id,
-                            last_faces=result.get("faces") or [],
-                            last_detection=result.get("snapshot"),
+                            last_faces=last_faces_cache,
                             increment_processed=True,
                         )
-                        logger.debug("Frame processed: %s", {"cameraId": camera_id, "state": result.get("state")})
-                    except Exception as exc:  # noqa: BLE001
-                        self._set_camera_frame_state(camera_id, increment_processed=True)
-                        logger.warning("Camera frame processing failed: %s", {"cameraId": camera_id, "err": str(exc)})
                     time.sleep(max(0.0, 1.0 / float(frame_rate)))
             finally:
                 self._terminate_ffmpeg_stream(stream)
@@ -1095,17 +1082,25 @@ class FaceEngine:
             "DETECTION_IMAGE_MAX_DIM",
             parse_int_env_setting(self.store, "DETECTION_IMAGE_MAX_DIM", 720),
         )
+        hw_args: list[str] = []
+        system_name = platform.system()
+        if system_name == "Darwin":
+            hw_args = ["-hwaccel", "videotoolbox"]
+        elif system_name in {"Windows", "Linux"}:
+            hw_args = ["-hwaccel", "auto"]
+
         args = [
             ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "info",
+            *hw_args,
             "-rtsp_transport",
             transport,
             "-timeout",
             "5000000",       # Socket I/O timeout (5 seconds in microseconds)
             "-thread_queue_size",
-            "8",
+            "16",
             "-fflags",
             "nobuffer",
             "-flags",
@@ -1123,10 +1118,12 @@ class FaceEngine:
             "-an",
             "-sn",
             "-dn",
+            "-threads",
+            "1",
             "-vf",
-            f"scale={max_dim}:-1",
+            f"scale=min(iw\\,{max_dim}):-2:flags=fast_bilinear",
             "-q:v",
-            "4",
+            "3",
             "-r",
             str(max(1, frame_rate)),
             "-f",
@@ -1304,6 +1301,14 @@ class FaceEngine:
         if embedding is None:
             embedding = getattr(face, "embedding", None)
         if embedding is None:
+            crop = getattr(face, "crop", None)
+            if crop is not None and hasattr(self._model, "embedding_for_crop"):
+                try:
+                    embedding = self._model.embedding_for_crop(crop)
+                    face.normed_embedding = embedding
+                except Exception:
+                    embedding = None
+        if embedding is None:
             return None
         vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
         if vector.size == 0:
@@ -1316,16 +1321,17 @@ class FaceEngine:
         camera_department_id: str | None = None,
         camera_id: str | None = None,
     ) -> dict[str, Any]:
-        embedding = self._embedding_for(face)
-        assert embedding is not None
-        raw_match = self._match_embedding(embedding, camera_department_id)
-        match = raw_match
+        quality_score = float(getattr(face, "quality_score", 1.0))
+        sharpness = float(getattr(face, "sharpness", 100.0))
+        is_sharp = bool(getattr(face, "is_sharp", True))
+        illumination = float(getattr(face, "illumination", 128.0))
+        is_face_processable = bool(getattr(face, "is_processable", True))
+
         bbox = [float(value) for value in getattr(face, "bbox", [0, 0, 0, 0])]
         x1, y1, x2, y2 = bbox[:4]
         w = max(0.0, x2 - x1)
         h = max(0.0, y2 - y1)
         confidence = float(getattr(face, "det_score", 0.0))
-        processable = True
 
         # Track management for 3-State Display: "tracking" (amber), "known" (green), "unknown" (red)
         track_key = f"{camera_id or 'cam'}"
@@ -1340,19 +1346,11 @@ class FaceEngine:
         best_dist = float("inf")
         for t in tracks:
             tcx, tcy = t["centroid"]
-            vx, vy = t.get("vx", 0.0), t.get("vy", 0.0)
-            dt = max(0.01, now_time - t["last_seen"])
-            # Predict position using velocity during motion
-            pred_cx = tcx + vx * dt
-            pred_cy = tcy + vy * dt
-            pred_dist = ((cx - pred_cx)**2 + (cy - pred_cy)**2)**0.5
+            tw, th = t["box"][2], t["box"][3]
+            max_allowed = max(w, h, tw, th) * 1.2
             direct_dist = ((cx - tcx)**2 + (cy - tcy)**2)**0.5
-            effective_dist = min(pred_dist, direct_dist)
-            
-            # Fast-motion tolerance: allow up to max(w, h) * 3.5 or 140px displacement between frames
-            max_allowed = max(max(w, h) * 3.5, 140.0)
-            if effective_dist < max_allowed and effective_dist < best_dist:
-                best_dist = effective_dist
+            if direct_dist < max_allowed and direct_dist < best_dist:
+                best_dist = direct_dist
                 matched_track = t
 
         if matched_track is None:
@@ -1366,53 +1364,103 @@ class FaceEngine:
                 "last_seen": now_time,
                 "confirmed_label": None,
                 "confirmed_score": 0.0,
+                "best_quality": quality_score,
+                "last_recognition_time": 0.0,
+                "history": [],
             }
             tracks.append(matched_track)
         else:
-            dt = max(0.01, now_time - matched_track["last_seen"])
-            old_cx, old_cy = matched_track["centroid"]
-            new_vx = (cx - old_cx) / dt
-            new_vy = (cy - old_cy) / dt
-            matched_track["vx"] = 0.6 * matched_track.get("vx", 0.0) + 0.4 * new_vx
-            matched_track["vy"] = 0.6 * matched_track.get("vy", 0.0) + 0.4 * new_vy
             matched_track["centroid"] = (cx, cy)
             matched_track["box"] = (x1, y1, w, h)
             matched_track["frames"] += 1
             matched_track["last_seen"] = now_time
 
-        # Quality check: detect if looking down at phone/floor
+        # Additional landmark geometry validation (looking down at phone/floor)
         kps = getattr(face, "kps", None)
-        is_face_processable = True
         if kps is not None and len(kps) >= 5:
             try:
                 left_eye, right_eye, nose, left_mouth, right_mouth = kps[:5]
                 eye_y = (float(left_eye[1]) + float(right_eye[1])) / 2.0
                 mouth_y = (float(left_mouth[1]) + float(right_mouth[1])) / 2.0
                 nose_y = float(nose[1])
-                # If looking straight down at phone/floor, vertical distance between eyes and mouth collapses
-                if (mouth_y - eye_y) < h * 0.16 or (nose_y - eye_y) < h * 0.05:
+                if (mouth_y - eye_y) < h * 0.15 or (nose_y - eye_y) < h * 0.04:
                     is_face_processable = False
             except Exception:
                 pass
 
-        if match and match.get("label"):
-            matched_track["confirmed_label"] = match["label"]
-            matched_track["confirmed_score"] = float(match["confidence"])
+        # Intelligent Recognition Scheduling (CentroidIOUTracker Optimization):
+        # Avoid redundant model inference on active tracks
+        should_run_recognition = (
+            is_face_processable and (
+                matched_track.get("confirmed_label") is None
+                or (now_time - float(matched_track.get("last_recognition_time", 0.0)) > 1.5)
+                or (quality_score > float(matched_track.get("best_quality", 0.0)) + 0.12)
+            )
+        )
+
+        raw_match = None
+        if should_run_recognition:
+            embedding = self._embedding_for(face)
+            if embedding is not None:
+                raw_match = self._match_embedding(embedding, camera_department_id)
+                matched_track["last_recognition_time"] = now_time
+                if quality_score > float(matched_track.get("best_quality", 0.0)):
+                    matched_track["best_quality"] = quality_score
+        elif matched_track.get("confirmed_label"):
+            raw_match = matched_track.get("best_match")
+
+        match = raw_match
+
+        # Multi-frame temporal voting & consensus
+        history = matched_track.setdefault("history", [])
+        if should_run_recognition:
+            history.append({
+                "label": raw_match["label"] if raw_match else None,
+                "score": float(raw_match["confidence"]) if raw_match else 0.0,
+                "raw_match": raw_match,
+                "time": now_time,
+                "quality": quality_score,
+                "processable": is_face_processable,
+            })
+        matched_track["history"] = [entry for entry in history if now_time - entry["time"] < 2.5]
+
+        valid_history = [entry for entry in matched_track["history"] if entry["processable"]]
+        label_counts: dict[str, int] = {}
+        label_best_match: dict[str, dict[str, Any]] = {}
+        for entry in valid_history:
+            lbl = entry["label"]
+            if lbl:
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+                if lbl not in label_best_match or entry["score"] > float(label_best_match[lbl].get("confidence", 0.0)):
+                    label_best_match[lbl] = entry["raw_match"]
+
+        best_label, best_count = None, 0
+        if label_counts:
+            best_label, best_count = max(label_counts.items(), key=lambda item: item[1])
+
+        # Verification Consensus:
+        # Require >= 2 confirming matches for normal certainty, or an ultra-high single match >= threshold + 0.08
+        if best_label and (best_count >= 2 or (raw_match and float(raw_match["confidence"]) >= self.match_threshold + 0.08)):
+            matched_track["confirmed_label"] = best_label
+            matched_track["confirmed_score"] = float(label_best_match[best_label]["confidence"])
+            matched_track["last_matched_time"] = now_time
+            matched_track["best_match"] = label_best_match[best_label]
+            match = label_best_match[best_label]
             track_status = "known"
-        elif matched_track["confirmed_label"]:
-            match = {
-                "label": matched_track["confirmed_label"],
-                "score": matched_track["confirmed_score"],
-                "confidence": matched_track["confirmed_score"],
-                "sampleCount": 1,
-            }
+        elif matched_track.get("confirmed_label") and (now_time - matched_track.get("last_matched_time", 0.0) < 1.5):
+            # Smoothly sustain verified identity during brief motion or illumination dip
             track_status = "known"
-        elif w < 32.0 or h < 32.0 or not is_face_processable or matched_track["frames"] < 3:
-            # Beyond reliable range (<32px, far doorway) or looking down: keep in Tracking... (amber)
+            match = matched_track.get("best_match")
+        elif w < 34.0 or h < 34.0 or not is_face_processable or len(valid_history) < 3:
+            # Low quality or insufficient frames -> Amber "Tracking" state (never alarm or guess)
             track_status = "tracking"
+            match = None
+            matched_track["confirmed_label"] = None
         else:
-            # Confirmed unknown inside clear recognition range (>=32px, frontal view, >=3 frames)
+            # Verified Unknown -> has at least 3 processable frames and failed all gallery candidates
             track_status = "unknown"
+            match = None
+            matched_track["confirmed_label"] = None
 
         return {
             "confidence": confidence,
@@ -1427,12 +1475,20 @@ class FaceEngine:
             "trackStatus": track_status,
             "isUnknown": track_status == "unknown",
             "isProcessable": is_face_processable,
+            "qualityScore": round(quality_score, 3),
+            "sharpness": round(sharpness, 2),
+            "isSharp": is_sharp,
+            "illumination": round(illumination, 1),
         }
 
     def _is_alertworthy_face(self, face: dict[str, Any], shape: tuple[int, ...]) -> bool:
         if not face.get("isUnknown") or face.get("trackStatus") != "unknown":
             return False
         if not face.get("isProcessable", True):
+            return False
+        if not face.get("isSharp", True) and float(face.get("sharpness", 100.0)) < 24.0:
+            return False
+        if float(face.get("qualityScore", 1.0)) < 0.30:
             return False
         if len(shape) < 2:
             return True
@@ -1443,13 +1499,14 @@ class FaceEngine:
         w = float(box.get("width") or 0.0)
         h = float(box.get("height") or 0.0)
         
-        # Only trigger alarms for faces inside reliable detection range (>= 38px)
-        min_alert_face_size = max(38, parse_int_env_setting(self.store, "MIN_ALERT_FACE_SIZE", 38))
+        # Only trigger alarms for faces inside reliable detection range (>= 28px)
+        min_alert_face_size = max(24, parse_int_env_setting(self.store, "MIN_ALERT_FACE_SIZE", 28))
         if w < min_alert_face_size or h < min_alert_face_size:
             return False
-        if x < 0 or y < 0:
-            return False
-        if x + w > width or y + h > height:
+        # Check if the face is mostly inside the frame (> 60% visible)
+        visible_w = max(0.0, min(x + w, width) - max(0.0, x))
+        visible_h = max(0.0, min(y + h, height) - max(0.0, y))
+        if visible_w < w * 0.60 or visible_h < h * 0.60:
             return False
         return True
 
@@ -1520,7 +1577,10 @@ class FaceEngine:
         best_score = float(best["score"])
         # Reject weak or ambiguous matches. This is deliberately conservative:
         # an unknown face must not be assigned to the nearest employee.
-        if best_score < self.match_threshold or best_score - runner_up_score < self.match_margin:
+        threshold = self.match_threshold
+        if len(candidates) == 1:
+            threshold = self.single_person_match_threshold
+        if best_score < threshold or (len(candidates) > 1 and best_score - runner_up_score < self.match_margin):
             return None
         best["margin"] = round(best_score - runner_up_score, 4)
         return best
@@ -1669,7 +1729,7 @@ class FaceEngine:
         camera_state = self._camera_alarm_state[camera_key]
         camera_state["last_alarm_at"] = now_ms
         camera_state["unknown_streak"] = 0
-        camera_state["suppress_alarm_until"] = now_ms + 2_000
+        camera_state["suppress_alarm_until"] = now_ms + self.alarm_cooldown_ms
 
         alarm_record = {
             "reason": reason,
@@ -1779,8 +1839,10 @@ class FaceEngine:
             union_area = (w1 * h1) + (w2 * h2) - inter_area
             iou = inter_area / union_area if union_area > 0 else 0.0
 
-            # Only carry over identity if the bounding box corresponds to the same person (> 25% overlap)
-            if iou >= 0.25:
+            # Only carry over identity when the box is very clearly the same
+            # person. A loose overlap lets a second person inherit the last
+            # known label when the gallery has only one employee.
+            if iou >= 0.50:
                 current_match = face.get("match") or {}
                 if not current_match.get("label"):
                     face["match"] = {
