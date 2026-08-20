@@ -40,7 +40,7 @@ class BackendProcess:
             return
 
         if timeout is None:
-            timeout = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "60.0"))
+            timeout = float(os.getenv("FACEAGENT_BACKEND_STARTUP_TIMEOUT", "900.0"))
 
         env = os.environ.copy()
         env.setdefault("FACEAGENT_BACKEND_URL", BACKEND_URL)
