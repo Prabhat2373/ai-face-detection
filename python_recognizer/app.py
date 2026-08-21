@@ -26,6 +26,13 @@ from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _THIS_DIR.parent
+for _p in (str(_PROJECT_ROOT), str(_THIS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from io import StringIO
 from collections import defaultdict
 from typing import Any
@@ -38,10 +45,14 @@ from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
 try:
     from python_recognizer.custom_pipeline import CustomONNXFacePipeline
-except ModuleNotFoundError:
-    from custom_pipeline import CustomONNXFacePipeline  # type: ignore
+except (ModuleNotFoundError, ImportError):
+    try:
+        from custom_pipeline import CustomONNXFacePipeline  # type: ignore
+    except Exception:
+        CustomONNXFacePipeline = None  # type: ignore
 
 try:
     cv2.setLogLevel(3)
@@ -67,7 +78,7 @@ try:
         unscope_key,
     )
     from python_recognizer.telemetry import telemetry_collector
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     from store import (  # type: ignore
         SQLiteStore,
         get_canonical_db_path,
@@ -80,7 +91,10 @@ except ModuleNotFoundError:
         scope_key,
         unscope_key,
     )
-    from telemetry import telemetry_collector  # type: ignore
+    try:
+        from telemetry import telemetry_collector  # type: ignore
+    except Exception:
+        telemetry_collector = None  # type: ignore
 
 
 logger = logging.getLogger("python_recognizer")

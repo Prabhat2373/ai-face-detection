@@ -114,15 +114,29 @@ hidden_modules = [
     "PySide6.QtNetwork",
     "tkinter",
     "_tkinter",
+    "python_recognizer",
     "python_recognizer.app",
     "python_recognizer.store",
+    "python_recognizer.custom_pipeline",
+    "python_recognizer.tracker",
+    "python_recognizer.telemetry",
+    "store",
+    "custom_pipeline",
+    "tracker",
+    "telemetry",
+    "ui",
+    "ui.app",
+    "ui.main_window",
+    "ui.backend_process",
+    "ui.database",
+    "ui.styles",
 ]
 
 all_datas = list(datas)
 all_binaries = []
 all_hiddenimports = list(hidden_modules)
 
-for mod in ["uvicorn", "onnxruntime", "insightface"]:
+for mod in ["uvicorn", "onnxruntime", "insightface", "cryptography"]:
     try:
         m_datas, m_binaries, m_hidden = collect_all(mod)
         all_datas.extend(m_datas)

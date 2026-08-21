@@ -394,6 +394,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             run_backend()
             return 0
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             print("Failed to run backend:", exc, file=sys.stderr)
             return 1
 
@@ -407,6 +409,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             ui_main()
             return 0
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             print("Failed to run UI:", exc, file=sys.stderr)
             return 1
 
