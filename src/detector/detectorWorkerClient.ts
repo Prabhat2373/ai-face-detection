@@ -50,6 +50,11 @@ export class DetectorWorkerClient extends EventEmitter {
     super();
     this.worker = new Worker(workerPath, {
       workerData,
+      // Node cannot execute the TypeScript worker directly during `npm run dev`.
+      // Keep production on the compiled .js worker, but load tsx for development.
+      execArgv: existsSync(tsWorkerPath) && !process.execArgv.some((arg) => arg.includes("tsx"))
+        ? [...process.execArgv, "--import", "tsx"]
+        : process.execArgv,
     });
 
     this.worker.on("message", (message: DetectorWorkerResponse) => this.handleMessage(message));

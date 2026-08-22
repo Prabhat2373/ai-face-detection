@@ -15,10 +15,20 @@ from ..backend_process import writable_app_dir
 
 
 PERFORMANCE_PROFILES = {
-    "low": {
-        "label": "Low Power / Battery Saver (recommended for 8 GB laptops)",
+    "ultra_efficiency": {
+        "label": "Ultra Efficiency (100+ cameras / battery saver)",
         "model": "custom_student",
-        "det_size": 480,
+        "det_size": 320,
+        "max_dim": 480,
+        "stream_fps": 6,
+        "detection_fps": 2,
+        "auto_start": False,
+        "description": "Maximum efficiency using motion gating & sub-millisecond INT8 inference. Supports 16–30+ cameras on Apple Silicon.",
+    },
+    "low": {
+        "label": "Low Power / Standard Laptop (recommended for 8 GB RAM)",
+        "model": "custom_student",
+        "det_size": 320,
         "max_dim": 640,
         "stream_fps": 10,
         "detection_fps": 3,
@@ -26,34 +36,36 @@ PERFORMANCE_PROFILES = {
         "description": "Minimal CPU and RAM usage. 10 FPS video preview with 3 FPS detection rate.",
     },
     "balanced": {
-        "label": "Balanced (recommended for most computers)",
+        "label": "Balanced (recommended for office attendance)",
         "model": "custom_student",
-        "det_size": 640,
+        "det_size": 320,
         "max_dim": 720,
         "stream_fps": 15,
         "detection_fps": 5,
         "auto_start": False,
-        "description": "Optimal balance for fast-walking targets. Fluid 15 FPS video preview with 5 FPS detection rate.",
+        "description": "Optimal balance for walking targets. Fluid 15 FPS video preview with 5 FPS detection rate.",
     },
     "high": {
         "label": "High Performance (multi-camera surveillance)",
         "model": "custom_student",
-        "det_size": 640,
-        "max_dim": 960,
-        "stream_fps": 20,
-        "detection_fps": 8,
+        # Keep the inference image bounded on CPU laptops. Higher source FPS
+        # does not improve recognition when the detector cannot keep up.
+        "det_size": 320,
+        "max_dim": 720,
+        "stream_fps": 15,
+        "detection_fps": 6,
         "auto_start": True,
-        "description": "High performance for multi-camera feeds. 20 FPS video preview with 8 FPS detection rate.",
+        "description": "High performance for multi-camera feeds with fast motion handling.",
     },
-    "very_high": {
-        "label": "Maximum Performance (dense crowds / high-speed targets)",
-        "model": "custom_student",
+    "extreme_accuracy": {
+        "label": "Extreme Accuracy (buffalo_l / ResNet-50 512D deep model)",
+        "model": "buffalo_l",
         "det_size": 640,
         "max_dim": 1080,
-        "stream_fps": 25,
-        "detection_fps": 10,
+        "stream_fps": 15,
+        "detection_fps": 5,
         "auto_start": True,
-        "description": "Maximum responsiveness. Full 25 FPS video preview with 10 FPS real-time detection rate.",
+        "description": "Maximum security accuracy using 50-layer deep ResNet-50 ArcFace (buffalo_l). Highest inter-person discrimination for high-security checkpoints.",
     },
 }
 

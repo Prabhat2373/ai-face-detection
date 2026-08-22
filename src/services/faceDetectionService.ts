@@ -357,7 +357,9 @@ export class FaceDetectionService {
       await this.attendance.load();
       await this.attendance.ensureFile();
       this.registeredFacesCount = this.registry.count;
-      throw new Error("Camera DB mode requires the Python recognizer service.");
+      if (!this.config.RTSP_URL) {
+        throw new Error("Set RTSP_URL or use RECOGNITION_BACKEND=python with a configured camera.");
+      }
     }
 
     this.detectionStride = Math.max(
@@ -367,7 +369,18 @@ export class FaceDetectionService {
     this.frameModulo = 0;
 
     if (!this.pythonRecognizer) {
-      this.stream = undefined;
+      const rtspUrl = this.config.RTSP_URL;
+      if (!rtspUrl) {
+        throw new Error("Set RTSP_URL or use RECOGNITION_BACKEND=python with a configured camera.");
+      }
+      this.stream = new RtspStream({
+        FFMPEG_PATH: this.config.FFMPEG_PATH,
+        STREAM_FRAME_RATE: this.config.STREAM_FRAME_RATE,
+        MAX_FRAME_BYTES: this.config.MAX_FRAME_BYTES,
+        rtspUrl,
+        rtspUsername: this.config.RTSP_USERNAME,
+        rtspPassword: this.config.RTSP_PASSWORD,
+      }, logger);
       this.detector = new DetectorWorkerClient(
         {
           threshold: this.config.DETECTION_THRESHOLD,
@@ -393,6 +406,22 @@ export class FaceDetectionService {
         this.detectionCount += 1;
       });
       this.detector.on("error", (error) => this.handleError(error));
+      this.stream.on("started", () => {
+        this.state = "running";
+        this.startedAt = new Date().toISOString();
+      });
+      this.stream.on("error", (error) => this.handleError(error));
+      this.stream.on("frame", (frame) => {
+        this.latestFrame = frame;
+        this.receivedFrames += 1;
+        this.frameModulo = (this.frameModulo + 1) % this.detectionStride;
+        if (this.frameModulo === 0) {
+          this.latestDetectionFrame = Buffer.from(frame);
+          this.acceptedFrames += 1;
+          this.detector?.detect(frame);
+        }
+      });
+      this.stream.start();
     }
   }
 

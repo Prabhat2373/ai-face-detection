@@ -15,6 +15,7 @@ from typing import Any
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
+from insightface.utils import face_align
 
 
 
@@ -127,7 +128,13 @@ class SCRFDDetector:
 class CustomONNXFacePipeline:
     """Independent detector plus the bundled custom ONNX recognizer."""
 
-    def __init__(self, model_path: str | Path | None = None, detection_scale: float = 1.0) -> None:
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        detection_scale: float = 1.0,
+        det_size: tuple[int, int] | int = 320,
+        det_thresh: float = 0.40,
+    ) -> None:
         configured = model_path or os.getenv("CUSTOM_RECOGNIZER_MODEL")
         if configured and Path(configured).exists():
             self.model_path = Path(configured)
@@ -135,10 +142,10 @@ class CustomONNXFacePipeline:
                 self.model_path = Path(__file__).resolve().parents[1] / self.model_path
         else:
             candidates = [
-                Path(__file__).resolve().parents[1] / "weights" / "custom_student" / "resnet50_512d_int8.onnx",
                 Path(__file__).resolve().parents[1] / "weights" / "custom_student" / "student_std_512d_int8.onnx",
-                Path.home() / ".insightface" / "models" / "buffalo_l" / "w600k_r50.onnx",
+                Path(__file__).resolve().parents[1] / "weights" / "custom_student" / "resnet50_512d_int8.onnx",
                 Path.home() / ".insightface" / "models" / "buffalo_s" / "w600k_mbf.onnx",
+                Path.home() / ".insightface" / "models" / "buffalo_l" / "w600k_r50.onnx",
             ]
             self.model_path = next((p for p in candidates if p.exists()), candidates[0])
 
@@ -180,9 +187,11 @@ class CustomONNXFacePipeline:
             providers=[p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()],
             allowed_modules=["detection"],
         )
-        det_size_cfg = int(os.getenv("INSIGHTFACE_DET_SIZE", "320"))
-        det_thresh_cfg = float(os.getenv("DETECTION_THRESHOLD", "0.45"))
-        self.detector.prepare(ctx_id=-1, det_size=(det_size_cfg, det_size_cfg), det_thresh=det_thresh_cfg)
+        if isinstance(det_size, int):
+            det_tuple = (det_size, det_size)
+        else:
+            det_tuple = det_size
+        self.detector.prepare(ctx_id=-1, det_size=det_tuple, det_thresh=det_thresh)
 
     @staticmethod
     def enhance_crop(crop: np.ndarray) -> np.ndarray:
@@ -225,11 +234,10 @@ class CustomONNXFacePipeline:
             return 0.0, 0.0, False, 0.0, False
 
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        is_sharp = sharpness >= 28.0
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_32F).var())
+        is_sharp = sharpness >= 16.0
 
-        lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB) if crop.ndim == 3 else None
-        illumination = float(np.mean(lab[:, :, 0])) if lab is not None else float(np.mean(gray))
+        illumination = float(np.mean(gray))
 
         w = float(max(1.0, bbox[2] - bbox[0]))
         h = float(max(1.0, bbox[3] - bbox[1]))
@@ -242,35 +250,39 @@ class CustomONNXFacePipeline:
                 mouth_center_y = (float(left_mouth[1]) + float(right_mouth[1])) / 2.0
                 nose_y = float(nose[1])
 
-                # Pitch / looking down at floor or phone
-                if (mouth_center_y - eye_center_y) < h * 0.15 or (nose_y - eye_center_y) < h * 0.04:
+                # Allow natural downward pitch (e.g. looking at laptop/phone) up to 45 deg
+                if (mouth_center_y - eye_center_y) < h * 0.08:
                     is_geometry_valid = False
 
-                # Yaw / profile asymmetry
+                # Eye horizontal level check (allow up to 25 deg head tilt)
+                eye_tilt = abs(float(right_eye[1]) - float(left_eye[1]))
+                if eye_tilt > h * 0.25:
+                    is_geometry_valid = False
+
+                # Yaw / profile asymmetry (allow 3D pose up to 40 deg)
                 left_dist = abs(float(nose[0]) - float(left_eye[0]))
                 right_dist = abs(float(right_eye[0]) - float(nose[0]))
                 yaw_ratio = min(left_dist, right_dist) / max(1.0, max(left_dist, right_dist))
-                if yaw_ratio < 0.15:
+                if yaw_ratio < 0.12:
                     is_geometry_valid = False
             except Exception:
                 pass
 
-        sharpness_factor = min(1.0, sharpness / 80.0)
+        sharpness_factor = min(1.0, sharpness / 60.0)
         illum_factor = max(0.0, 1.0 - abs(illumination - 128.0) / 128.0)
         det_factor = min(1.0, max(0.0, det_score))
         quality_score = float(0.4 * sharpness_factor + 0.3 * illum_factor + 0.3 * det_factor)
         if not is_geometry_valid:
-            quality_score *= 0.5
+            quality_score *= 0.6
 
-        is_processable = (sharpness >= 22.0) and (illumination >= 22.0) and (illumination <= 245.0) and is_geometry_valid
+        is_processable = (w >= 28.0 and h >= 28.0 and sharpness >= 16.0 and 30.0 <= illumination <= 245.0 and is_geometry_valid)
         return quality_score, sharpness, is_sharp, illumination, is_processable
 
     def _embedding(self, crop: np.ndarray) -> np.ndarray:
-        crop = self.enhance_crop(crop)
         if (crop.shape[0], crop.shape[1]) != self.input_size:
             crop = cv2.resize(crop, self.input_size, interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
-        tensor = (rgb / 127.5) - 1.0
+        tensor = (rgb - 127.5) / 127.5
         tensor = np.transpose(tensor, (2, 0, 1))[None, ...]
         output = self.session.run([self.output_name], {self.input_name: tensor})[0]
         vector = np.asarray(output, dtype=np.float32).reshape(-1)
@@ -313,7 +325,7 @@ class CustomONNXFacePipeline:
                 crop, kps, box, det_score
             )
 
-            emb = self._embedding(crop) if compute_embeddings else None
+            emb = self._embedding(crop) if (compute_embeddings and is_proc) else None
 
             faces.append(DetectedFace(
                 bbox=np.asarray([x, y, x2, y2], dtype=np.float32),

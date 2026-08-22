@@ -190,8 +190,14 @@ class CameraFeedWidget(QFrame):
                 continue
             painter.drawRect(int(x), int(y), int(w), int(h))
 
-            confidence = match.get("confidence", face.get("confidence", 0))
-            text = f"{label} · {round(float(confidence or 0) * 100)}%"
+            if track_status == "known" and match.get("confidence") is not None:
+                text = f"{label} · {round(float(match.get('confidence') or 0) * 100)}%"
+            elif track_status == "unknown":
+                # Detection confidence is not identity confidence. Showing it
+                # beside UNKNOWN incorrectly suggests a 70% identity match.
+                text = "Unknown · awaiting confirmation"
+            else:
+                text = "Tracking · quality insufficient"
             metrics = painter.fontMetrics()
             text_width = metrics.horizontalAdvance(text) + 14
             text_y = max(4, int(y) - 24)

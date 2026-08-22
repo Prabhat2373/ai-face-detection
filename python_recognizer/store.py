@@ -131,8 +131,8 @@ def normalize_embedding(embedding: Any) -> Any:
 class SQLiteStore:
     """Thread-safe SQLite store for all application data."""
 
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = db_path
+    def __init__(self, db_path: Path | str) -> None:
+        self.db_path = Path(db_path)
         self._lock = threading.RLock()
         self._credential_key_path = self.db_path.parent / ".camera-credentials.key"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1113,10 +1113,23 @@ class SQLiteStore:
         """Return recent unknown person alarm events for the alarms page."""
         with self._lock, self.connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM sync_events WHERE event_type = 'alarm.triggered' ORDER BY id DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM sync_events "
+                "WHERE event_type IN ('alarm.triggered', 'alarm.invalidated') "
+                "ORDER BY id DESC LIMIT ?",
+                (max(limit * 3, limit),),
             ).fetchall()
-            return [dict(row) for row in rows]
+            invalidated: set[int] = set()
+            alarms: list[dict[str, Any]] = []
+            for row in rows:
+                payload = dict(row)
+                if payload.get("event_type") == "alarm.invalidated":
+                    try:
+                        invalidated.add(int(json.loads(payload.get("payload") or "{}").get("alarmId")))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                else:
+                    alarms.append(payload)
+            return [row for row in alarms if int(row.get("id") or 0) not in invalidated][:limit]
 
     def mark_sync_events_synced(self, ids: list[int]) -> None:
         if not ids:

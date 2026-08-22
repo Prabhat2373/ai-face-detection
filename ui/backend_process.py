@@ -62,8 +62,8 @@ class BackendProcess:
         custom_model_dir = bundled_resource("weights", "custom_student")
         if custom_model_dir.exists():
             candidates = [
-                custom_model_dir / "resnet50_512d_int8.onnx",
                 custom_model_dir / "student_std_512d_int8.onnx",
+                custom_model_dir / "resnet50_512d_int8.onnx",
             ]
             chosen = next((p for p in candidates if p.exists()), None)
             if chosen:

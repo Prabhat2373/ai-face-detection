@@ -20,6 +20,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
 os.environ.setdefault("ONNXRUNTIME_ENGINE_THREAD_POOL_SIZE", "2")
 import threading
 import time
+import queue
 from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlsplit, urlunsplit
@@ -201,6 +202,15 @@ class FFmpegStream:
     extractor: JpegFrameExtractor
 
 
+@dataclass
+class InferenceJob:
+    camera_id: str
+    camera_role: str
+    department_id: str
+    frame: np.ndarray
+    enqueued_at: float
+
+
 
 class FaceEngine:
     def __init__(self) -> None:
@@ -227,39 +237,31 @@ class FaceEngine:
         self.store.ensure_tenant(self.default_tenant_id, os.getenv("DEFAULT_TENANT_NAME", "Local Tenant"))
         self._ensure_low_memory_defaults()
 
+        # Settings saved by the desktop UI take strict precedence over environment variables
+        self.model_name = self.store.get_setting("INSIGHTFACE_MODEL", os.getenv("INSIGHTFACE_MODEL", "custom_student"))
+
+        configured_det_size = parse_int_env_setting(
+            self.store,
+            "INSIGHTFACE_DET_SIZE",
+            parse_int_env("INSIGHTFACE_DET_SIZE", 320),
+        )
+        self.det_size = (configured_det_size, configured_det_size)
+
         self.match_threshold = parse_float_env(
             "PYTHON_MATCH_THRESHOLD",
-            parse_float_env("MATCH_THRESHOLD", 0.45),
+            parse_float_env("MATCH_THRESHOLD", 0.44),
         )
         # A one-person gallery has no runner-up, so a strict calibrated threshold is used.
         self.single_person_match_threshold = parse_float_env(
             "SINGLE_PERSON_MATCH_THRESHOLD",
-            max(self.match_threshold, 0.48),
+            max(self.match_threshold, 0.46),
         )
-        self.match_margin = parse_float_env("MATCH_MARGIN", 0.06)
+        self.match_margin = parse_float_env("MATCH_MARGIN", 0.08)
         self.detection_threshold = parse_float_env(
             "PYTHON_DETECTION_THRESHOLD",
-            parse_float_env("DETECTION_THRESHOLD", 0.35),
+            parse_float_env("DETECTION_THRESHOLD", 0.40),
         )
         self.snapshot_cooldown_ms = parse_int_env("SNAPSHOT_COOLDOWN_MS", 10_000)
-        # Settings saved by the desktop UI take precedence over environment
-        # defaults. Low-memory mode is the safe default for 8 GB machines.
-        configured_det_size = parse_int_env(
-            "INSIGHTFACE_DET_SIZE",
-            parse_int_env_setting(
-                self.store,
-                "INSIGHTFACE_DET_SIZE",
-                parse_int_env("INSIGHTFACE_DET_WIDTH", 640),
-            ),
-        )
-        self.det_size = (
-            configured_det_size,
-            parse_int_env("INSIGHTFACE_DET_HEIGHT", configured_det_size),
-        )
-        self.model_name = os.getenv(
-            "CUSTOM_RECOGNIZER_MODEL_NAME",
-            self.store.get_setting("INSIGHTFACE_MODEL", "custom_student"),
-        )
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             default_alarm = Path(meipass) / "python_recognizer" / "alarm.wav"
@@ -268,12 +270,14 @@ class FaceEngine:
         downloads_alarm = Path.home() / "Downloads" / "mixkit-data-scaner-2847.wav"
         configured_alarm = os.getenv("ALARM_SOUND_PATH")
         self.alarm_sound_path = Path(configured_alarm).expanduser() if configured_alarm else (default_alarm if default_alarm.exists() else downloads_alarm)
-        self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 30_000)
-        self.alarm_unknown_frames = parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 1)
-        self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", self.detection_threshold)
-        self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.85)
-        self.known_grace_ms = parse_int_env("KNOWN_GRACE_MS", 800)
-        self.recognition_grace_ms = parse_int_env("RECOGNITION_GRACE_MS", 1_000)
+        self.alarm_cooldown_ms = parse_int_env("ALARM_COOLDOWN_MS", 0)
+        self.alarm_unknown_frames = max(5, parse_int_env("ALARM_UNKNOWN_CONFIRMATION_FRAMES", 8))
+        self.alarm_min_detection_confidence = parse_float_env("ALARM_MIN_DETECTION_CONFIDENCE", 0.40)
+        self.alarm_immediate_unknown_confidence = parse_float_env("ALARM_IMMEDIATE_UNKNOWN_CONFIDENCE", 0.40)
+        # A known person must not become an alarm because one or two walking,
+        # occluded, or motion-blurred frames temporarily fail matching.
+        self.known_grace_ms = max(5_000, parse_int_env("KNOWN_GRACE_MS", 8_000))
+        self.recognition_grace_ms = parse_int_env("RECOGNITION_GRACE_MS", 0)
 
         # Check-in sound configuration
         self.check_in_sound_enabled = os.getenv("CHECK_IN_SOUND_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
@@ -290,6 +294,24 @@ class FaceEngine:
         self.sync_endpoint_url = os.getenv("SYNC_ENDPOINT_URL", "").strip()
         self.sync_interval_ms = parse_int_env("SYNC_INTERVAL_MS", 5000)
         self._model_lock = threading.Lock()
+        # A bounded central queue prevents one slow camera from creating an
+        # unbounded backlog. Only the newest frame for each camera matters.
+        self._inference_queue: queue.Queue[InferenceJob] = queue.Queue(
+            maxsize=max(1, parse_int_env("INFERENCE_QUEUE_SIZE", 2))
+        )
+        self._pending_inference: set[str] = set()
+        self._pending_inference_lock = threading.Lock()
+        self._inference_stop = threading.Event()
+        self._inference_workers: list[threading.Thread] = []
+        worker_count = max(1, parse_int_env("INFERENCE_WORKERS", 1))
+        for index in range(worker_count):
+            worker = threading.Thread(
+                target=self._inference_worker_loop,
+                name=f"face-inference-{index + 1}",
+                daemon=True,
+            )
+            self._inference_workers.append(worker)
+            worker.start()
         self._snapshot_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._last_snapshot_at = 0.0
@@ -327,6 +349,7 @@ class FaceEngine:
                 "last_unknown_at": 0.0,
                 "last_unknown_confidence": 0.0,
                 "suppress_alarm_until": 0.0,
+                "last_alarm_event_id": None,
             }
         )
         self._camera_identity_state: dict[str, dict[str, Any]] = defaultdict(
@@ -342,6 +365,53 @@ class FaceEngine:
             self._sync_thread.start()
         if self.auto_start_detection:
             threading.Thread(target=self._auto_start_cameras, daemon=True).start()
+
+    def _enqueue_inference(self, job: InferenceJob) -> bool:
+        """Enqueue at most one in-flight job per camera."""
+        with self._pending_inference_lock:
+            if job.camera_id in self._pending_inference:
+                return False
+            self._pending_inference.add(job.camera_id)
+        try:
+            self._inference_queue.put_nowait(job)
+            return True
+        except queue.Full:
+            with self._pending_inference_lock:
+                self._pending_inference.discard(job.camera_id)
+            return False
+
+    def _inference_worker_loop(self) -> None:
+        while not self._inference_stop.is_set():
+            try:
+                job = self._inference_queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                # Never spend CPU on stale work after a backlog or reconnect.
+                max_age_ms = max(250, parse_int_env("MAX_INFERENCE_FRAME_AGE_MS", 1500))
+                if (time.monotonic() - job.enqueued_at) * 1000.0 <= max_age_ms:
+                    result = self.recognize(
+                        job.frame,
+                        job.camera_role,
+                        job.camera_id,
+                        self.default_tenant_id,
+                        job.department_id,
+                    )
+                    self._set_camera_frame_state(
+                        job.camera_id,
+                        last_faces=result.get("faces") or [],
+                        last_detection=result.get("snapshot"),
+                        increment_processed=True,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Inference frame processing failed: %s",
+                    {"cameraId": job.camera_id, "err": str(exc)},
+                )
+            finally:
+                with self._pending_inference_lock:
+                    self._pending_inference.discard(job.camera_id)
+                self._inference_queue.task_done()
 
     def _ensure_low_memory_defaults(self) -> None:
         """Create the first-run low-memory profile in the shared settings DB."""
@@ -367,27 +437,33 @@ class FaceEngine:
             return db_val.lower() in {"1", "true", "yes", "on"}
         return fallback
 
-    def _load_model(self) -> CustomONNXFacePipeline:
-        """Load only the bundled custom detector/recognizer pipeline."""
-        if self.model_name != "custom_student":
-            logger.warning("Ignoring unsupported model '%s'; custom_student is mandatory", self.model_name)
-        return CustomONNXFacePipeline()
+    def _load_model(self) -> Any:
+        """Load the active face detection and recognition pipeline."""
+        if self.model_name in {"buffalo_s", "buffalo_l", "buffalo_m"}:
+            from insightface.app import FaceAnalysis
+            model_root = os.getenv("INSIGHTFACE_MODEL_DIR") or str(Path.home() / ".cache" / "insightface")
+            providers = [p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()]
+            model = FaceAnalysis(name=self.model_name, root=model_root, providers=providers)
+            model.prepare(ctx_id=-1, det_size=self.det_size, det_thresh=self.detection_threshold)
+            return model
+        return CustomONNXFacePipeline(det_size=self.det_size, det_thresh=self.detection_threshold)
 
     def health(self) -> dict[str, Any]:
-        custom_onnx_path = self._model.model_path
-        is_custom_active = True
+        custom_onnx_path = getattr(self._model, "model_path", Path("."))
+        is_custom_active = isinstance(self._model, CustomONNXFacePipeline)
+        embedding_dim = getattr(self._model, "embedding_dim", 512)
         return {
             "ok": True,
             "ready": True,
             "configuredModel": self.model_name,
             "model": "custom_student_int8" if is_custom_active else self.model_name,
             "customStudentModelActive": is_custom_active,
-            "customStudentModelAvailable": custom_onnx_path.exists(),
-            "customStudentModelPath": str(custom_onnx_path) if custom_onnx_path.exists() else None,
+            "customStudentModelAvailable": custom_onnx_path.exists() if hasattr(custom_onnx_path, "exists") else False,
+            "customStudentModelPath": str(custom_onnx_path) if hasattr(custom_onnx_path, "exists") and custom_onnx_path.exists() else None,
             "teacherFallbackModel": None,
             "detector": "buffalo_s",
-            "insightfaceRuntime": False,
-            "recognizerEmbeddingDimension": self._model.embedding_dim,
+            "insightfaceRuntime": not is_custom_active,
+            "recognizerEmbeddingDimension": embedding_dim,
             "faces": self._registered_face_count,
             "cameras": len(self.store.list_cameras(self.default_tenant_id)),
             "runningCameras": len(self._camera_workers),
@@ -425,7 +501,7 @@ class FaceEngine:
                     },
                     "busy": False,
                     "processedFrames": int(frame_state.get("processedFrames") or 0),
-                    "droppedFrames": 0,
+                    "droppedFrames": int(frame_state.get("droppedFrames") or 0),
                     "lastFaces": frame_state.get("lastFaces") or [],
                     "lastDetection": frame_state.get("lastDetection"),
                 }
@@ -445,6 +521,8 @@ class FaceEngine:
                     "busy": False,
                     "droppedFrames": 0,
                     "processedFrames": 0,
+                    "queueDepth": self._inference_queue.qsize(),
+                    "workers": len(self._inference_workers),
                 },
             },
             "config": {
@@ -892,7 +970,9 @@ class FaceEngine:
         camera_role = str(camera.get("camera_role") or "general")
         camera_id = str(camera.get("id") or "")
         camera_department_id = str(camera.get("department_id") or "")
-        frame_rate = max(1, parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 3))
+        frame_rate = max(1, parse_int_env_setting(self.store, "STREAM_FRAME_RATE", 15))
+        det_fps = max(1, parse_int_env_setting(self.store, "FRAME_RATE", 5))
+        detect_stride = max(1, int(round(frame_rate / float(det_fps))))
         retry_delay = 1.0
         transport_cycle = ["tcp", "udp"]
         transport_index = 0
@@ -991,44 +1071,50 @@ class FaceEngine:
                         time.sleep(0.005)
                         continue
 
-                    # 3. Ultra-fast motion check (0.05ms) using a 64x48 thumbnail
-                    small_gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 48), interpolation=cv2.INTER_NEAREST)
+                    # 3. Substream optimization: process inference at 640x360
+                    proc_h, proc_w = frame.shape[:2]
+                    if proc_w > 640 or proc_h > 360:
+                        proc_scale = min(640.0 / proc_w, 360.0 / proc_h)
+                        det_w, det_h = int(proc_w * proc_scale), int(proc_h * proc_scale)
+                        frame_proc = cv2.resize(frame, (det_w, det_h), interpolation=cv2.INTER_AREA)
+                    else:
+                        frame_proc = frame
+
+                    # 4. Ultra-fast motion gate (0.05ms) using a 64x36 thumbnail
+                    small_gray = cv2.resize(cv2.cvtColor(frame_proc, cv2.COLOR_BGR2GRAY), (64, 36), interpolation=cv2.INTER_NEAREST)
                     has_motion = True
                     if last_motion_thumb is not None:
                         diff = cv2.absdiff(small_gray, last_motion_thumb)
                         motion_score = float(np.mean(diff))
-                        has_motion = motion_score > 1.0
+                        has_motion = motion_score > 1.2
                     last_motion_thumb = small_gray
 
                     track_key = f"{camera_id or 'cam'}"
                     active_tracks_count = len(self._active_tracks.get(track_key, []))
 
-                    # Detector-Tracker Interleaving:
-                    # When active face tracks exist, alternate detection every 2nd frame (half deep learning load)
-                    # When new motion enters, detect immediately
-                    # When static scene, run 1.0s heartbeat check
-                    if active_tracks_count > 0:
-                        should_detect = (frame_counter - last_det_frame_idx >= 2)
-                    elif has_motion:
-                        should_detect = True
+                    # 5. Dynamic Detection Stride based on Performance Profile:
+                    # If motion or active tracks exist, detect according to configured profile detection rate
+                    # If static scene with no motion, run a 2.0s heartbeat detection
+                    if active_tracks_count > 0 or has_motion:
+                        should_detect = (frame_counter - last_det_frame_idx >= detect_stride) or (last_det_frame_idx == 0)
                     else:
-                        should_detect = (frame_counter - last_det_frame_idx >= frame_rate)
+                        should_detect = (frame_counter - last_det_frame_idx >= int(frame_rate * 2.0))
 
                     if should_detect:
-                        try:
-                            last_det_frame_idx = frame_counter
-                            result = self.recognize(frame, camera_role, camera_id, self.default_tenant_id, current_dept_id)
-                            last_faces_cache = result.get("faces") or []
-                            self._set_camera_frame_state(
-                                camera_id,
-                                last_faces=last_faces_cache,
-                                last_detection=result.get("snapshot"),
-                                increment_processed=True,
+                        last_det_frame_idx = frame_counter
+                        accepted = self._enqueue_inference(
+                            InferenceJob(
+                                camera_id=camera_id,
+                                camera_role=camera_role,
+                                department_id=current_dept_id,
+                                frame=frame_proc.copy(),
+                                enqueued_at=time.monotonic(),
                             )
-                            logger.debug("Frame processed: %s", {"cameraId": camera_id, "state": result.get("state")})
-                        except Exception as exc:  # noqa: BLE001
-                            self._set_camera_frame_state(camera_id, increment_processed=True)
-                            logger.warning("Camera frame processing failed: %s", {"cameraId": camera_id, "err": str(exc)})
+                        )
+                        if not accepted:
+                            # The queue is deliberately lossy: preserving the
+                            # newest frame is more useful than accumulating lag.
+                            self._set_camera_frame_state(camera_id, increment_dropped=True)
                     else:
                         self._set_camera_frame_state(
                             camera_id,
@@ -1183,6 +1269,7 @@ class FaceEngine:
         last_faces: list[dict[str, Any]] | None = None,
         last_detection: dict[str, Any] | None = None,
         increment_processed: bool = False,
+        increment_dropped: bool = False,
     ) -> None:
         with self._camera_frames_lock:
             state = self._camera_frames.setdefault(
@@ -1196,6 +1283,7 @@ class FaceEngine:
                     "lastFaces": [],
                     "lastDetection": None,
                     "processedFrames": 0,
+                    "droppedFrames": 0,
                 },
             )
             if running is not None:
@@ -1213,6 +1301,8 @@ class FaceEngine:
                 state["lastDetection"] = last_detection
             if increment_processed:
                 state["processedFrames"] = int(state.get("processedFrames") or 0) + 1
+            if increment_dropped:
+                state["droppedFrames"] = int(state.get("droppedFrames") or 0) + 1
 
     def _camera_status_snapshot(self, camera_id: str) -> dict[str, Any]:
         with self._camera_frames_lock:
@@ -1275,8 +1365,6 @@ class FaceEngine:
         for face in faces:
             score = float(getattr(face, "det_score", 0.0))
             if score < self.detection_threshold:
-                continue
-            if self._embedding_for(face) is None:
                 continue
 
             # Bounding box size & aspect ratio validation
@@ -1453,20 +1541,20 @@ class FaceEngine:
             best_label, best_count = max(label_counts.items(), key=lambda item: item[1])
 
         # Verification Consensus:
-        # Require >= 2 confirming matches for normal certainty, or an ultra-high single match >= threshold + 0.08
-        if best_label and (best_count >= 2 or (raw_match and float(raw_match["confidence"]) >= self.match_threshold + 0.08)):
+        # Immediate Known if raw_match confidence is strong (>= threshold), or confirmed by 2 consensus votes
+        if best_label and (best_count >= 2 or (raw_match and float(raw_match["confidence"]) >= self.match_threshold)):
             matched_track["confirmed_label"] = best_label
             matched_track["confirmed_score"] = float(label_best_match[best_label]["confidence"])
             matched_track["last_matched_time"] = now_time
             matched_track["best_match"] = label_best_match[best_label]
             match = label_best_match[best_label]
             track_status = "known"
-        elif matched_track.get("confirmed_label") and (now_time - matched_track.get("last_matched_time", 0.0) < 1.5):
-            # Smoothly sustain verified identity during brief motion or illumination dip
+        elif matched_track.get("confirmed_label") and (now_time - matched_track.get("last_matched_time", 0.0) < 2.5):
+            # Smoothly sustain verified identity during motion or momentary profile angle
             track_status = "known"
             match = matched_track.get("best_match")
-        elif w < 34.0 or h < 34.0 or not is_face_processable or len(valid_history) < 3:
-            # Low quality or insufficient frames -> Amber "Tracking" state (never alarm or guess)
+        elif w < 28.0 or h < 28.0 or not is_face_processable or len(valid_history) < 3:
+            # Suboptimal quality or initial track frames -> Amber "Tracking" state (prevents false alarms)
             track_status = "tracking"
             match = None
             matched_track["confirmed_label"] = None
@@ -1478,6 +1566,12 @@ class FaceEngine:
 
         return {
             "confidence": confidence,
+            "detectionConfidence": confidence,
+            "recognitionConfidence": (
+                float(match.get("confidence"))
+                if match and match.get("confidence") is not None
+                else None
+            ),
             "box": {
                 "x": x1,
                 "y": y1,
@@ -1549,8 +1643,10 @@ class FaceEngine:
             if not scores:
                 continue
             scores.sort(reverse=True)
-            top_scores = scores[:2]
-            score = float(np.mean(top_scores)) if len(top_scores) >= 2 else float(top_scores[0])
+            # Registration images can have very different quality. Do not let
+            # one poor sample dilute a strong live match; temporal consensus
+            # still prevents a one-frame identity decision.
+            score = float(scores[0])
             employee_id = next((sample[1] for sample in samples if sample[1]), None)
             emp_dept_tokens = {token for sample in samples for token in sample[2]}
             active = all(sample[3] for sample in samples)
@@ -1754,7 +1850,8 @@ class FaceEngine:
             "faces": faces,
             "snapshot": snapshot,
         }
-        self.store.enqueue_sync_event("alarm.triggered", alarm_record)
+        event_id = self.store.enqueue_sync_event("alarm.triggered", alarm_record)
+        camera_state["last_alarm_event_id"] = event_id
         logger.warning("Alarm triggered: %s", alarm_record)
         self._play_alarm_sound()
 
@@ -1767,6 +1864,7 @@ class FaceEngine:
         camera_state = self._camera_alarm_state[camera_key]
         now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
         if known_faces:
+            self._invalidate_pending_alarm(camera_state, "known_identity_confirmed")
             camera_state["unknown_streak"] = 0
             camera_state["last_known_at"] = now_ms
             camera_state["last_unknown_signature"] = None
@@ -1778,8 +1876,24 @@ class FaceEngine:
             camera_state["last_unknown_signature"] = self._face_signature(best_unknown)
             camera_state["last_unknown_at"] = now_ms
             camera_state["last_unknown_confidence"] = float(best_unknown.get("confidence") or 0.0)
-            if int(camera_state["unknown_streak"]) == 1:
+            if self.alarm_cooldown_ms > 0 and int(camera_state["unknown_streak"]) == 1:
                 camera_state["suppress_alarm_until"] = now_ms + 1_500
+            return
+        # A blur/occlusion/track-only observation is not evidence that the
+        # same person is still unknown. Break the consecutive sequence so an
+        # alarm requires uninterrupted, high-quality unknown observations.
+        self._invalidate_pending_alarm(camera_state, "tracking_or_quality_insufficient")
+        camera_state["unknown_streak"] = 0
+
+    def _invalidate_pending_alarm(self, camera_state: dict[str, Any], reason: str) -> None:
+        event_id = camera_state.get("last_alarm_event_id")
+        if not event_id:
+            return
+        self.store.enqueue_sync_event(
+            "alarm.invalidated",
+            {"alarmId": int(event_id), "reason": reason, "timestamp": iso_now()},
+        )
+        camera_state["last_alarm_event_id"] = None
 
     def _should_alarm_camera(self, camera_key: str, unknown_faces: list[dict[str, Any]]) -> bool:
         if not unknown_faces:
@@ -1787,22 +1901,21 @@ class FaceEngine:
 
         camera_state = self._camera_alarm_state[camera_key]
         now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
-        if now_ms < float(camera_state.get("suppress_alarm_until") or 0.0):
+
+        # Prevent split-second false alarms if a known person was recently recognized in this feed
+        if now_ms - float(camera_state.get("last_known_at", 0.0)) < self.known_grace_ms:
             return False
-        if now_ms - float(camera_state["last_known_at"]) < self.known_grace_ms:
+
+        # Require several consecutive confirmed unknown observations. This is
+        # deliberately conservative for a security-sensitive alarm.
+        if int(camera_state.get("unknown_streak", 0)) < self.alarm_unknown_frames:
             return False
-        best_unknown = max(unknown_faces, key=lambda face: float(face.get("confidence") or 0.0))
-        best_confidence = float(best_unknown.get("confidence") or 0.0)
-        if best_confidence >= self.alarm_immediate_unknown_confidence:
-            return now_ms - float(camera_state["last_alarm_at"]) >= self.alarm_cooldown_ms
-        if int(camera_state["unknown_streak"]) < self.alarm_unknown_frames:
-            return False
-        current_signature = self._face_signature(best_unknown)
-        last_signature = str(camera_state.get("last_unknown_signature") or "")
-        if last_signature and current_signature != last_signature:
-            return False
-        if now_ms - float(camera_state["last_alarm_at"]) < self.alarm_cooldown_ms:
-            return False
+
+        if self.alarm_cooldown_ms > 0:
+            if now_ms < float(camera_state.get("suppress_alarm_until") or 0.0):
+                return False
+            if now_ms - float(camera_state["last_alarm_at"]) < self.alarm_cooldown_ms:
+                return False
         return True
 
     def _stabilize_camera_faces(
@@ -1811,64 +1924,9 @@ class FaceEngine:
         camera_role: str,
         camera_id: str | None,
     ) -> list[dict[str, Any]]:
-        if not faces:
-            return faces
-
-        camera_key = camera_id or camera_role or "general"
-        camera_state = self._camera_identity_state[camera_key]
-        now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000.0
-
-        known_faces = [face for face in faces if face["match"] and face["match"].get("label")]
-        if known_faces:
-            best = max(known_faces, key=lambda face: float(face["match"]["confidence"]))
-            camera_state["last_known_label"] = str(best["match"]["label"])
-            camera_state["last_known_confidence"] = float(best["match"]["confidence"])
-            camera_state["last_known_box"] = best.get("box") or {}
-            camera_state["last_known_at"] = now_ms
-            return faces
-
-        recent_label = camera_state.get("last_known_label")
-        recent_box = camera_state.get("last_known_box") or {}
-        recent_seen_at = float(camera_state.get("last_known_at") or 0.0)
-        recent_confidence = float(camera_state.get("last_known_confidence") or 0.0)
-
-        if (
-            recent_label
-            and recent_box
-            and now_ms - recent_seen_at <= self.recognition_grace_ms
-            and len(faces) == 1
-        ):
-            face = dict(faces[0])
-            cur_box = face.get("box") or {}
-            
-            # Compute IoU between recent known box and current face box
-            x1, y1 = float(recent_box.get("x", 0)), float(recent_box.get("y", 0))
-            w1, h1 = float(recent_box.get("width", 0)), float(recent_box.get("height", 0))
-            x2, y2 = float(cur_box.get("x", 0)), float(cur_box.get("y", 0))
-            w2, h2 = float(cur_box.get("width", 0)), float(cur_box.get("height", 0))
-            
-            inter_x1, inter_y1 = max(x1, x2), max(y1, y2)
-            inter_x2, inter_y2 = min(x1 + w1, x2 + w2), min(y1 + h1, y2 + h2)
-            inter_area = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
-            union_area = (w1 * h1) + (w2 * h2) - inter_area
-            iou = inter_area / union_area if union_area > 0 else 0.0
-
-            # Only carry over identity when the box is very clearly the same
-            # person. A loose overlap lets a second person inherit the last
-            # known label when the gallery has only one employee.
-            if iou >= 0.50:
-                current_match = face.get("match") or {}
-                if not current_match.get("label"):
-                    face["match"] = {
-                        "label": recent_label,
-                        "score": recent_confidence,
-                        "confidence": recent_confidence,
-                        "sampleCount": current_match.get("sampleCount", 0),
-                        "stabilized": True,
-                    }
-                    camera_state["last_known_box"] = cur_box
-                    return [face]
-
+        # Track-level identity continuity is managed cleanly inside _serialize_face
+        # via CentroidIOUTracker. Global camera-level carryover is disabled to prevent
+        # unknown individuals from ever inheriting an employee's identity.
         return faces
 
     def _face_signature(self, face: dict[str, Any]) -> str:

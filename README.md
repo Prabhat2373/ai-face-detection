@@ -63,6 +63,10 @@ Required variables:
 - `BACKUP_INTERVAL_SECONDS`: Time between automatic backups. Defaults to `86400` seconds.
 - `BACKUP_RETENTION_COUNT`: Number of recent database backups to keep. Defaults to `7`.
 - `BACKUP_PATH`: Optional backup directory. Defaults to the application data `backups` directory.
+- `INFERENCE_WORKERS`: Number of central face-inference workers. Defaults to `1`; increase only when CPU capacity has been measured.
+- `INFERENCE_QUEUE_SIZE`: Maximum queued inference frames. Defaults to `2`; stale work is dropped to prevent latency buildup.
+- `MAX_INFERENCE_FRAME_AGE_MS`: Maximum age of a queued frame before it is discarded. Defaults to `1500`.
+- `ALARM_UNKNOWN_CONFIRMATION_FRAMES`: Consecutive high-quality unknown observations required before an alarm. Defaults to `5` and cannot be lower than `3`.
 
 ## Install
 
